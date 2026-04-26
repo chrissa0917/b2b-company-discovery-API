@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SearchJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ContactEmailStatus {
+  UNVERIFIED
+  VERIFIED
+  INVALID
+  RISKY
+}
+
+model SearchJob {
+  id         String          @id @default(cuid())
+  keyword    String
+  location   String
+  limit      Int
+  status     SearchJobStatus @default(PENDING)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  companies  Company[]
+  auditLogs  AuditLog[]
+}
+
+model Company {
+  id            String      @id @default(cuid())
+  searchJobId   String
+  name          String
+  domain        String?
+  websiteUrl    String?
+  location      String?
+  leadScore     Int         @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  searchJob     SearchJob   @relation(fields: [searchJobId], references: [id], onDelete: Cascade)
+  contacts      Contact[]
+  crawlPages    CrawlPage[]
+}
+
+model Contact {
+  id              String             @id @default(cuid())
+  companyId       String
+  email           String
+  fullName        String?
+  title           String?
+  sourceUrl       String
+  verification    ContactEmailStatus @default(UNVERIFIED)
+  confidenceScore Int                @default(0)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  company         Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, email])
+}
+
+model CrawlPage {
+  id          String   @id @default(cuid())
+  companyId   String
+  url         String
+  title       String?
+  statusCode  Int?
+  crawledAt   DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, url])
+}
+
+model SuppressionList {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  reason      String?
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  searchJobId String?
+  event       String
+  details     Json?
+  createdAt   DateTime @default(now())
+
+  searchJob   SearchJob? @relation(fields: [searchJobId], references: [id], onDelete: SetNull)
+}

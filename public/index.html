@@ -22,7 +22,7 @@
     .anchor-links{display:flex;gap:1.1rem;font-size:.85rem;color:var(--muted)}
 
     .hero{min-height:100vh;display:grid;align-items:center;position:relative;overflow:hidden;padding-top:5rem;border-bottom:1px solid var(--border)}
-    .hero::before{content:"";position:absolute;inset:0;background:linear-gradient(rgba(0,0,0,.68),rgba(6,6,6,.82)),url('https://images.unsplash.com/photo-1600607687644-c7f34b5f3f1f?auto=format&fit=crop&w=2200&q=80') center/cover no-repeat;animation:slowZoom 22s ease-out forwards;transform:scale(1)}
+    .hero::before{content:"";position:absolute;inset:0;background:linear-gradient(rgba(0,0,0,.68),rgba(6,6,6,.82)),url('https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=2400&q=90') center/cover no-repeat;animation:slowZoom 22s ease-out forwards;transform:scale(1)}
     .hero::after{content:"";position:absolute;inset:-20%;background:
       radial-gradient(circle at 20% 30%,rgba(191,160,107,.23),transparent 25%),
       radial-gradient(circle at 76% 60%,rgba(216,192,151,.15),transparent 30%),
@@ -30,15 +30,12 @@
       filter:blur(14px);animation:lightSweep 8s linear infinite}
     @keyframes slowZoom{to{transform:scale(1.1)}} @keyframes lightSweep{0%{transform:translateX(-5%) translateY(0)}50%{transform:translateX(4%) translateY(-1%)}100%{transform:translateX(-5%) translateY(0)}}
 
-    .streaks,.orbs{position:absolute;inset:0;pointer-events:none;z-index:2}
-    .streaks span{position:absolute;height:1px;width:40vw;background:linear-gradient(90deg,transparent,rgba(216,192,151,.55),transparent);animation:streak 10s linear infinite}
-    .streaks span:nth-child(1){top:24%;left:-10%}.streaks span:nth-child(2){top:38%;left:20%;animation-delay:2.8s}.streaks span:nth-child(3){top:68%;left:-15%;animation-delay:5.2s}
-    @keyframes streak{0%{transform:translateX(-8vw)}50%{opacity:.8}100%{transform:translateX(20vw);opacity:0}}
+    .streaks,.orbs{position:absolute;inset:0;pointer-events:none;z-index:0}
     .orbs span{position:absolute;border-radius:50%;filter:blur(36px);background:rgba(216,192,151,.2);animation:drift 13s ease-in-out infinite}
-    .orbs span:nth-child(1){height:110px;width:110px;top:20%;right:18%}.orbs span:nth-child(2){height:70px;width:70px;bottom:18%;left:16%;animation-delay:3s}
+    .orbs span:nth-child(1){height:100px;width:100px;top:18%;right:14%}
     @keyframes drift{50%{transform:translateY(-22px) translateX(8px)} }
 
-    .hero-content{position:relative;z-index:3;max-width:760px;padding:4rem 0 3rem}
+    .hero-content{position:relative;z-index:3;max-width:760px;padding:5.5rem 0 4rem}
     .eyebrow{text-transform:uppercase;letter-spacing:.2em;font-size:.75rem;color:var(--champagne)}
     .lead{font-size:1.15rem;color:var(--muted);max-width:63ch}
     .reveal-text>*{opacity:0;transform:translateY(24px);animation:rise .9s ease forwards}
@@ -51,44 +48,44 @@
 
     .hero-cards{position:absolute;right:4%;bottom:8%;z-index:3;display:grid;gap:.8rem;max-width:280px}
     .floating-card{padding:.9rem 1rem;border:1px solid var(--border);background:var(--glass);backdrop-filter:blur(8px);box-shadow:0 16px 35px rgba(0,0,0,.4);animation:float 5s ease-in-out infinite}
-    .floating-card:nth-child(2){animation-delay:1.2s}.floating-card:nth-child(3){animation-delay:2.2s}
+    .floating-card:nth-child(2){animation-delay:1.2s}
     @keyframes float{50%{transform:translateY(-8px)}}
 
-    section{padding:6.2rem 0;border-bottom:1px solid rgba(255,255,255,.08)}
+    section{padding:7.5rem 0;border-bottom:1px solid rgba(255,255,255,.08)}
     .panel{background:var(--glass);border:1px solid rgba(216,192,151,.25);backdrop-filter:blur(8px);border-radius:6px;padding:1.3rem;box-shadow:0 12px 36px rgba(0,0,0,.28)}
     .search-grid,.listings-grid,.value-grid,.areas-grid{display:grid;gap:1.1rem}
     .search-grid{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
-    .listings-grid{grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:1.4rem}
+    .listings-grid{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:1.8rem}
     .value-grid{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin-top:1.3rem}
     .areas-grid{grid-template-columns:repeat(auto-fit,minmax(210px,1fr));margin-top:1.3rem}
     input,select,textarea{width:100%;margin-top:.45rem;padding:.78rem;border:1px solid rgba(255,255,255,.2);background:#0d0d0d;color:var(--ivory)}
-    .card img{width:100%;aspect-ratio:4/3;object-fit:cover;border:1px solid rgba(255,255,255,.15)} .meta{color:var(--muted);font-size:.95rem}
+    .card img{width:100%;aspect-ratio:16/10;object-fit:cover;border:1px solid rgba(255,255,255,.15);box-shadow:0 18px 38px rgba(0,0,0,.42)} .meta{color:var(--muted);font-size:.95rem}
     .faq-item{margin-bottom:1.1rem;padding-bottom:1rem;border-bottom:1px solid rgba(255,255,255,.1)} .business-details{color:var(--muted)} footer{padding:2.2rem 0 3rem;color:var(--muted);font-size:.9rem}
 
     .reveal{opacity:0;transform:translateY(26px);transition:opacity .8s ease,transform .8s ease}
     .reveal.visible{opacity:1;transform:translateY(0)}
 
-    @media (max-width:900px){.hero-cards{position:relative;right:auto;bottom:auto;max-width:none;margin-top:1.1rem}.anchor-links{display:none}}
-    @media (max-width:700px){section{padding:4.5rem 0}}
+    @media (max-width:900px){.hero-cards{position:relative;right:auto;bottom:auto;max-width:none;margin-top:1.4rem;grid-template-columns:1fr}.anchor-links{display:none}.listings-grid{grid-template-columns:1fr}}
+    @media (max-width:700px){section{padding:5rem 0}.hero-content{padding:4.5rem 0 2.6rem}}
   </style>
 </head>
 <body>
   <header class="top-nav"><div class="container"><div class="brand">NOIR <span>ESTATES</span></div><nav class="anchor-links"><a href="#search">Search</a><a href="#listings">Listings</a><a href="#sellers">For Sellers</a><a href="#areas">Service Areas</a><a href="#tour">Private Tour</a><a href="#faq">FAQ</a></nav></div></header>
 
   <section class="hero" id="top">
-    <div class="streaks"><span></span><span></span><span></span></div><div class="orbs"><span></span><span></span></div>
+    <div class="orbs"><span></span></div>
     <div class="container hero-content reveal-text">
       <p class="eyebrow">Luxury Real Estate Agent</p>
       <h1>Luxury Homes for Buyers Who Expect More</h1>
       <p class="lead">Private tours, curated listings, and discreet guidance for high-value homes.</p>
       <div class="cta-row"><a class="btn" href="#tour" data-action="book-private-tour">Book a Private Tour</a><a class="btn secondary" href="#valuation" data-action="request-home-valuation">Request Luxury Home Valuation</a></div>
-      <div class="hero-cards"><div class="floating-card">New Listing · Architectural Estate</div><div class="floating-card">Private Tour · Same-Day Coordination</div><div class="floating-card">Sold Above Asking · Discreet Campaign</div></div>
+      <div class="hero-cards"><div class="floating-card">New Listing · Architectural Estate</div><div class="floating-card">Private Tour · Same-Day Coordination</div></div>
     </div>
   </section>
 
   <section class="reveal"><div class="container"><div class="panel"><h2>What is the best way to find luxury homes for sale?</h2><p>The best approach is to work with a luxury real estate agent who offers curated on-market and off-market luxury properties, schedules private home tours quickly, and guides negotiations discreetly.</p></div></div></section>
   <section id="search" class="reveal"><div class="container"><h2>Search luxury homes near me by your exact criteria</h2><div class="panel"><form class="search-grid"><label>Location<input type="text" placeholder="Beverly Hills, Malibu, Manhattan" /></label><label>Price Range<select><option>$2M - $5M</option><option>$5M - $10M</option><option>$10M+</option></select></label><label>Bedrooms<select><option>3+</option><option>4+</option><option>5+</option></select></label><label>Property Type<select><option>Estate</option><option>Penthouse</option><option>Waterfront Villa</option></select></label><button class="btn" type="button" data-action="inquire-listing">Inquire About Listings</button></form></div></div></section>
-  <section id="listings" class="reveal"><div class="container"><h2>Featured luxury homes for sale</h2><p class="lead">A rotating collection of luxury homes for sale and off-market luxury properties selected for privacy, architecture, and long-term value.</p><div class="listings-grid"><article class="card panel"><img src="https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1200&q=80" alt="Contemporary glass mansion with infinity pool at sunset" /><h3>Hillside Glass Estate</h3><p class="meta">Bel Air · 6 Beds · 8 Baths · $12.8M</p></article><article class="card panel"><img src="https://images.unsplash.com/photo-1592595896616-c37162298647?auto=format&fit=crop&w=1200&q=80" alt="Luxury waterfront villa with private dock and palm-lined lawn" /><h3>Waterfront Sanctuary</h3><p class="meta">Miami Beach · 5 Beds · 7 Baths · $9.6M</p></article><article class="card panel"><img src="https://images.unsplash.com/photo-1584738766473-61c083514bf4?auto=format&fit=crop&w=1200&q=80" alt="Elegant penthouse terrace with skyline views and evening lighting" /><h3>Skyline Penthouse Residence</h3><p class="meta">New York · 4 Beds · 5 Baths · $15.2M</p></article></div></div></section>
+  <section id="listings" class="reveal"><div class="container"><h2>Featured luxury homes for sale</h2><p class="lead">A rotating collection of luxury homes for sale and off-market luxury properties selected for privacy, architecture, and long-term value.</p><div class="listings-grid"><article class="card panel"><img src="https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&w=1400&q=90" alt="Contemporary glass mansion with infinity pool at sunset" /><h3>Hillside Glass Estate</h3><p class="meta">Bel Air · 6 Beds · 8 Baths · $12.8M</p></article><article class="card panel"><img src="https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&w=1400&q=90" alt="Luxury waterfront villa with private dock and palm-lined lawn" /><h3>Waterfront Sanctuary</h3><p class="meta">Miami Beach · 5 Beds · 7 Baths · $9.6M</p></article><article class="card panel"><img src="https://images.unsplash.com/photo-1600607688969-a5bfcd646154?auto=format&fit=crop&w=1400&q=90" alt="Elegant penthouse terrace with skyline views and evening lighting" /><h3>Skyline Penthouse Residence</h3><p class="meta">New York · 4 Beds · 5 Baths · $15.2M</p></article></div></div></section>
   <section id="buyers" class="reveal"><div class="container"><h2>Why luxury buyers choose us</h2><div class="value-grid"><div class="panel"><h3>Discreet access</h3><p>Private introductions to on-market and off-market luxury properties with complete confidentiality.</p></div><div class="panel"><h3>Curated speed</h3><p>Shortlisted homes aligned to lifestyle goals so you spend time touring only your strongest matches.</p></div><div class="panel"><h3>Strategic guidance</h3><p>Data-backed pricing strategy, reputation-aware negotiations, and trusted closing coordination.</p></div></div></div></section>
   <section id="sellers" class="reveal"><div class="container"><h2>How we help you sell my luxury home requests</h2><p class="lead">For owners ready to sell my luxury home with privacy, we provide discreet marketing, premium positioning, and buyer qualification before showings.</p><div class="panel" id="valuation"><h3>Request a private luxury valuation</h3><p class="meta">Receive a confidential, data-informed valuation and launch plan within 24 hours.</p><a class="btn" href="#tour" data-action="request-home-valuation">Request Luxury Home Valuation</a></div></div></section>
   <section id="areas" class="reveal"><div class="container"><h2>Luxury real estate service areas</h2><div class="areas-grid"><div class="panel">Beverly Hills & Westside Los Angeles</div><div class="panel">Malibu & Coastal Estates</div><div class="panel">Manhattan & Brooklyn Prime Towers</div><div class="panel">Miami Beach & Fisher Island</div></div></div></section>

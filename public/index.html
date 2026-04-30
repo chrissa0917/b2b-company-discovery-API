@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Luxury Homes for Sale | Private Luxury Real Estate Brokerage</title>
+  <meta name="description" content="Discover luxury homes for sale with private tours, curated listings, and discreet guidance from a luxury real estate agent. Buy or sell with confidence." />
+  <meta name="keywords" content="luxury homes for sale, luxury real estate, luxury homes near me, private home tours, sell my luxury home, off-market luxury properties, luxury real estate agent" />
+  <style>
+    :root {
+      --charcoal: #121212;
+      --charcoal-soft: #1b1b1b;
+      --ivory: #f5f0e6;
+      --gold: #bfa06b;
+      --gold-soft: rgba(191, 160, 107, 0.35);
+      --glass: rgba(18, 18, 18, 0.5);
+      --border: rgba(245, 240, 230, 0.2);
+      --muted: #d8d1c4;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      background: linear-gradient(180deg, var(--charcoal), #0c0c0c);
+      color: var(--ivory);
+      line-height: 1.6;
+      letter-spacing: 0.01em;
+    }
+
+    h1, h2, h3 {
+      font-family: "Georgia", "Times New Roman", serif;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      margin: 0 0 0.8rem;
+      line-height: 1.2;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .container {
+      width: min(1120px, 92%);
+      margin: 0 auto;
+    }
+
+    .top-nav {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      backdrop-filter: blur(8px);
+      background: rgba(12, 12, 12, 0.8);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .top-nav .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 0;
+      gap: 1rem;
+    }
+
+    .brand { font-family: Georgia, serif; font-size: 1.1rem; letter-spacing: 0.08em; }
+    .brand span { color: var(--gold); }
+
+    .anchor-links { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.9rem; color: var(--muted); }
+
+    .hero {
+      position: relative;
+      min-height: 88vh;
+      display: grid;
+      align-items: center;
+      overflow: hidden;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(rgba(12, 12, 12, 0.56), rgba(12, 12, 12, 0.76)),
+        url("https://images.unsplash.com/photo-1613977257363-707ba9348227?auto=format&fit=crop&w=1920&q=80") center/cover no-repeat;
+      transform: scale(1);
+      animation: slowZoom 16s ease-out forwards;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at 68% 28%, var(--gold-soft), transparent 38%);
+      pointer-events: none;
+    }
+
+    @keyframes slowZoom { to { transform: scale(1.09); } }
+
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      padding: 5rem 0;
+      max-width: 740px;
+    }
+
+    .eyebrow { text-transform: uppercase; font-size: 0.78rem; letter-spacing: 0.18em; color: var(--gold); }
+    h1 { font-size: clamp(2rem, 5vw, 4rem); }
+
+    .lead { font-size: 1.08rem; color: var(--muted); max-width: 62ch; }
+
+    .cta-row { display: flex; flex-wrap: wrap; gap: 0.85rem; margin-top: 1.8rem; }
+
+    .btn {
+      padding: 0.85rem 1.2rem;
+      border: 1px solid var(--gold);
+      color: var(--ivory);
+      background: rgba(191, 160, 107, 0.14);
+      border-radius: 2px;
+      transition: transform .25s ease, background .25s ease;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .btn:hover { transform: translateY(-2px); background: rgba(191,160,107,.24); }
+    .btn.secondary { background: transparent; border-color: var(--border); }
+
+    section { padding: 5rem 0; border-bottom: 1px solid var(--border); }
+
+    .panel {
+      background: var(--glass);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      backdrop-filter: blur(8px);
+      padding: 1.2rem;
+    }
+
+    .answer-block p { margin: 0.5rem 0 0; color: var(--muted); }
+
+    .search-grid, .listings-grid, .value-grid, .areas-grid {
+      display: grid;
+      gap: 1rem;
+    }
+
+    .search-grid { grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); }
+    .listings-grid { grid-template-columns: repeat(auto-fit,minmax(250px,1fr)); margin-top: 1.2rem; }
+    .value-grid { grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); margin-top: 1.2rem; }
+    .areas-grid { grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); margin-top: 1.2rem; }
+
+    input, select, textarea {
+      width: 100%;
+      margin-top: 0.45rem;
+      padding: 0.72rem;
+      border: 1px solid var(--border);
+      background: #111;
+      color: var(--ivory);
+    }
+
+    .card img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+      border: 1px solid var(--border);
+    }
+
+    .meta { color: var(--muted); font-size: 0.95rem; }
+
+    .faq-item { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+
+    .business-details { font-size: 0.95rem; color: var(--muted); }
+
+    footer { padding: 2rem 0 3rem; color: var(--muted); font-size: 0.88rem; }
+
+    @media (max-width: 700px) {
+      .anchor-links { display: none; }
+      section { padding: 3.5rem 0; }
+    }
+  </style>
+</head>
+<body>
+  <header class="top-nav">
+    <div class="container">
+      <div class="brand">NOIR <span>ESTATES</span></div>
+      <nav class="anchor-links" aria-label="Luxury real estate page sections">
+        <a href="#search">Search</a>
+        <a href="#listings">Listings</a>
+        <a href="#sellers">For Sellers</a>
+        <a href="#areas">Service Areas</a>
+        <a href="#tour">Private Tour</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero" id="top">
+    <div class="container hero-content">
+      <p class="eyebrow">Luxury Real Estate Agent</p>
+      <h1>Luxury Homes for Buyers Who Expect More</h1>
+      <p class="lead">Private tours, curated listings, and discreet guidance for high-value homes.</p>
+      <div class="cta-row">
+        <a class="btn" href="#tour" data-action="book-private-tour">Book a Private Tour</a>
+        <a class="btn secondary" href="#valuation" data-action="request-home-valuation">Request Luxury Home Valuation</a>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <div class="panel answer-block" id="answer-block">
+        <h2>What is the best way to find luxury homes for sale?</h2>
+        <p>The best approach is to work with a luxury real estate agent who offers curated on-market and off-market luxury properties, schedules private home tours quickly, and guides negotiations discreetly.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="search">
+    <div class="container">
+      <h2>Search luxury homes near me by your exact criteria</h2>
+      <div class="panel">
+        <form class="search-grid" aria-label="Luxury home search">
+          <label>Location<input type="text" placeholder="Beverly Hills, Malibu, Manhattan" /></label>
+          <label>Price Range<select><option>$2M - $5M</option><option>$5M - $10M</option><option>$10M+</option></select></label>
+          <label>Bedrooms<select><option>3+</option><option>4+</option><option>5+</option></select></label>
+          <label>Property Type<select><option>Estate</option><option>Penthouse</option><option>Waterfront Villa</option></select></label>
+          <button class="btn" type="button" data-action="inquire-listing">Inquire About Listings</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section id="listings">
+    <div class="container">
+      <h2>Featured luxury homes for sale</h2>
+      <p class="lead">A rotating collection of luxury homes for sale and off-market luxury properties selected for privacy, architecture, and long-term value.</p>
+      <div class="listings-grid">
+        <article class="card panel">
+          <img src="https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1200&q=80" alt="Contemporary glass mansion with infinity pool at sunset" />
+          <h3>Hillside Glass Estate</h3>
+          <p class="meta">Bel Air · 6 Beds · 8 Baths · $12.8M</p>
+        </article>
+        <article class="card panel">
+          <img src="https://images.unsplash.com/photo-1592595896616-c37162298647?auto=format&fit=crop&w=1200&q=80" alt="Luxury waterfront villa with private dock and palm-lined lawn" />
+          <h3>Waterfront Sanctuary</h3>
+          <p class="meta">Miami Beach · 5 Beds · 7 Baths · $9.6M</p>
+        </article>
+        <article class="card panel">
+          <img src="https://images.unsplash.com/photo-1584738766473-61c083514bf4?auto=format&fit=crop&w=1200&q=80" alt="Elegant penthouse terrace with skyline views and evening lighting" />
+          <h3>Skyline Penthouse Residence</h3>
+          <p class="meta">New York · 4 Beds · 5 Baths · $15.2M</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="buyers">
+    <div class="container">
+      <h2>Why luxury buyers choose us</h2>
+      <div class="value-grid">
+        <div class="panel"><h3>Discreet access</h3><p>Private introductions to on-market and off-market luxury properties with complete confidentiality.</p></div>
+        <div class="panel"><h3>Curated speed</h3><p>Shortlisted homes aligned to lifestyle goals so you spend time touring only your strongest matches.</p></div>
+        <div class="panel"><h3>Strategic guidance</h3><p>Data-backed pricing strategy, reputation-aware negotiations, and trusted closing coordination.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sellers">
+    <div class="container">
+      <h2>How we help you sell my luxury home requests</h2>
+      <p class="lead">For owners ready to sell my luxury home with privacy, we provide discreet marketing, premium positioning, and buyer qualification before showings.</p>
+      <div class="panel" id="valuation">
+        <h3>Request a private luxury valuation</h3>
+        <p class="meta">Receive a confidential, data-informed valuation and launch plan within 24 hours.</p>
+        <a class="btn" href="#tour" data-action="request-home-valuation">Request Luxury Home Valuation</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="areas">
+    <div class="container">
+      <h2>Luxury real estate service areas</h2>
+      <div class="areas-grid">
+        <div class="panel">Beverly Hills & Westside Los Angeles</div>
+        <div class="panel">Malibu & Coastal Estates</div>
+        <div class="panel">Manhattan & Brooklyn Prime Towers</div>
+        <div class="panel">Miami Beach & Fisher Island</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tour">
+    <div class="container">
+      <h2>Book a private home tour</h2>
+      <div class="panel">
+        <form id="privateTourForm" aria-label="Private tour lead form">
+          <div class="search-grid">
+            <label>Full Name<input required type="text" /></label>
+            <label>Email<input required type="email" /></label>
+            <label>Phone<input type="tel" /></label>
+            <label>Preferred Area<input type="text" placeholder="Neighborhood or city" /></label>
+          </div>
+          <label>What are you looking for?<textarea rows="4" placeholder="Budget, style, timeline, and must-have features."></textarea></label>
+          <div class="cta-row">
+            <button class="btn" type="submit" data-action="book-private-tour">Book Private Tour</button>
+            <button class="btn secondary" type="button" data-action="inquire-listing">Inquire About Listing</button>
+          </div>
+        </form>
+      </div>
+      <div class="panel business-details" style="margin-top:1rem;">
+        <strong>Business Details (Placeholder):</strong><br />
+        Noir Estates Luxury Division<br />
+        1000 Portfolio Avenue, Suite 500, City, ST 00000<br />
+        Phone: +1 (000) 000-0000 | Email: concierge@noirestates.com<br />
+        Hours: Mon-Sat 8:00 AM - 8:00 PM
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="container">
+      <h2>Luxury real estate FAQ</h2>
+      <article class="faq-item">
+        <h3>How do I find off-market luxury properties?</h3>
+        <p>Work with a luxury real estate agent who has private seller relationships and verifies buyer readiness before sharing off-market inventory.</p>
+      </article>
+      <article class="faq-item">
+        <h3>Are private home tours available on short notice?</h3>
+        <p>Yes. Private tours can usually be arranged quickly once your purchase timeline and proof of funds are confirmed.</p>
+      </article>
+      <article class="faq-item">
+        <h3>What is the first step to sell my luxury home?</h3>
+        <p>Start with a confidential valuation and positioning strategy, then prepare tailored media and targeted outreach to qualified buyers.</p>
+      </article>
+      <article class="faq-item">
+        <h3>Can you help me compare luxury homes near me across neighborhoods?</h3>
+        <p>Yes. We provide side-by-side market comparisons for architecture, pricing, privacy, and long-term appreciation potential.</p>
+      </article>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">© 2026 Noir Estates · Luxury homes for sale · Private tours · Premium advisory.</div>
+  </footer>
+
+  <script>
+    document.getElementById('privateTourForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      alert('Thank you. A luxury advisor will contact you shortly to coordinate your private tour.');
+    });
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "RealEstateAgent",
+    "name": "Noir Estates Luxury Division",
+    "description": "Luxury real estate agent services for buyers and sellers seeking luxury homes for sale and off-market luxury properties.",
+    "url": "https://www.example.com/luxury-homes",
+    "telephone": "+1-000-000-0000",
+    "email": "concierge@noirestates.com",
+    "address": {
+      "@type": "PostalAddress",
+      "streetAddress": "1000 Portfolio Avenue, Suite 500",
+      "addressLocality": "City",
+      "addressRegion": "ST",
+      "postalCode": "00000",
+      "addressCountry": "US"
+    },
+    "potentialAction": [
+      {"@type": "CommunicateAction", "name": "book private tour", "target": "https://www.example.com/luxury-homes#tour"},
+      {"@type": "CommunicateAction", "name": "request home valuation", "target": "https://www.example.com/luxury-homes#valuation"},
+      {"@type": "CommunicateAction", "name": "inquire about listing", "target": "https://www.example.com/luxury-homes#search"}
+    ]
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {"@type": "Question", "name": "How do I find off-market luxury properties?", "acceptedAnswer": {"@type": "Answer", "text": "Work with a luxury real estate agent who has private seller relationships and verifies buyer readiness before sharing off-market inventory."}},
+      {"@type": "Question", "name": "Are private home tours available on short notice?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. Private tours can usually be arranged quickly once your purchase timeline and proof of funds are confirmed."}},
+      {"@type": "Question", "name": "What is the first step to sell my luxury home?", "acceptedAnswer": {"@type": "Answer", "text": "Start with a confidential valuation and positioning strategy, then prepare tailored media and targeted outreach to qualified buyers."}}
+    ]
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "Luxury Homes for Sale | Noir Estates",
+    "description": "Luxury homes for sale with private home tours, valuation services, and premium buyer/seller advisory.",
+    "url": "https://www.example.com/luxury-homes"
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://www.example.com/"},
+      {"@type": "ListItem", "position": 2, "name": "Luxury Homes", "item": "https://www.example.com/luxury-homes"}
+    ]
+  }
+  </script>
+</body>
+</html>

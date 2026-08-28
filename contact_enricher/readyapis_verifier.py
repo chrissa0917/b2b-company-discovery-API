@@ -1,67 +1,54 @@
 from __future__ import annotations
 
+import os
 import httpx
 
-READYAPIS_DEMO_PROBE = "https://readyapis.com/demo/api/v1/email/probe"
+SMTP_PROBE_URL = os.getenv("SMTP_PROBE_URL", "").strip()
+SMTP_PROBE_TOKEN = os.getenv("SMTP_PROBE_TOKEN", "").strip()
 
 
 async def verify_email_readyapis(email: str) -> dict:
-    """Run Ready APIs' free live SMTP RCPT probe over HTTPS.
+    """Run the free Supabase-hosted SMTP RCPT probe over HTTPS.
 
-    This avoids Railway's outbound SMTP restriction because Railway only makes
-    an HTTPS request; the external verifier performs the HELO/MAIL FROM/RCPT TO
-    conversation against the recipient MX.
+    Railway makes only an HTTPS request. The Supabase Edge Function performs
+    the MX lookup, SMTP RCPT TO mailbox probe, and catch-all test.
     """
     email = (email or "").strip().lower()
     if not email:
-        return {"verdict": "not_run", "provider": "readyapis", "error": "empty email"}
+        return {"verdict": "not_run", "provider": "supabase-smtp-probe", "error": "empty email"}
+    if not SMTP_PROBE_URL or not SMTP_PROBE_TOKEN:
+        return {"verdict": "unknown", "provider": "supabase-smtp-probe", "error": "probe not configured"}
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(14.0, connect=4.0)) as client:
-            response = await client.get(
-                READYAPIS_DEMO_PROBE,
-                params={"email": email, "check_catch_all": "true"},
-                headers={"User-Agent": "ChrissaAutomates-ContactEnricher/benchmark"},
+        async with httpx.AsyncClient(timeout=httpx.Timeout(18.0, connect=5.0)) as client:
+            response = await client.post(
+                SMTP_PROBE_URL,
+                json={"email": email},
+                headers={
+                    "x-probe-token": SMTP_PROBE_TOKEN,
+                    "User-Agent": "ChrissaAutomates-ContactEnricher/benchmark",
+                },
             )
             response.raise_for_status()
             payload = response.json()
     except Exception as exc:
         return {
             "verdict": "unknown",
-            "provider": "readyapis",
+            "provider": "supabase-smtp-probe",
             "error": str(exc)[:220],
         }
 
-    data = payload.get("data") if isinstance(payload, dict) else None
-    attrs = data.get("attributes") if isinstance(data, dict) else None
-    if not isinstance(attrs, dict):
-        attrs = {}
-
-    raw = str(attrs.get("verdict") or attrs.get("status") or "").strip().lower()
-    mapping = {
-        "deliverable": "valid",
-        "valid": "valid",
-        "catch_all": "catch_all",
-        "accept_all": "catch_all",
-        "undeliverable": "invalid",
-        "invalid": "invalid",
-        "greylisted": "unknown",
-        "unknown": "unknown",
-    }
-    verdict = mapping.get(raw, "unknown")
-    if raw.startswith("inconclusive"):
-        verdict = "unknown"
+    raw = str(payload.get("verdict") or "unknown").strip().lower() if isinstance(payload, dict) else "unknown"
+    verdict = raw if raw in {"valid", "invalid", "catch_all", "unknown"} else "unknown"
 
     return {
         "verdict": verdict,
-        "provider": "readyapis",
-        "raw_verdict": raw or "unknown",
-        "confidence": attrs.get("confidence"),
-        "mx_host": attrs.get("mx_host"),
-        "rcpt_status_code": attrs.get("rcpt_status_code"),
-        "rcpt_response_line": attrs.get("rcpt_response_line"),
-        "catch_all_check_status": attrs.get("catch_all_check_status"),
-        "is_catch_all": attrs.get("is_catch_all"),
-        "error": attrs.get("error"),
-        "findings": attrs.get("findings"),
+        "provider": "supabase-smtp-probe",
+        "raw_verdict": raw,
+        "mx_host": payload.get("mx_host") if isinstance(payload, dict) else None,
+        "rcpt_status_code": payload.get("rcpt_code") if isinstance(payload, dict) else None,
+        "rcpt_response_line": payload.get("rcpt_response") if isinstance(payload, dict) else None,
+        "is_catch_all": payload.get("catch_all") if isinstance(payload, dict) else None,
+        "catch_all_rcpt_code": payload.get("catch_all_rcpt_code") if isinstance(payload, dict) else None,
+        "error": payload.get("error") if isinstance(payload, dict) else None,
     }

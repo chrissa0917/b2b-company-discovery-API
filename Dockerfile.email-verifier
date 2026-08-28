@@ -1,8 +1,20 @@
 FROM golang:1.23-alpine AS build
 WORKDIR /src
+
+# Build from the preserved local snapshot so production does not depend on
+# AfterShip/email-verifier remaining available on GitHub.
+COPY third_party/aftership-email-verifier ./third_party/aftership-email-verifier
 COPY email_verifier/main.go ./main.go
-RUN go mod init buyandrentrobots-email-verifier \
-    && go get github.com/AfterShip/email-verifier@d8462fdd79d9aca5452bd220f9cd5224976fea49 \
+
+RUN printf '%s\n' \
+      'module buyandrentrobots-email-verifier' \
+      '' \
+      'go 1.23' \
+      '' \
+      'require github.com/AfterShip/email-verifier v0.0.0' \
+      '' \
+      'replace github.com/AfterShip/email-verifier => ./third_party/aftership-email-verifier' \
+      > go.mod \
     && go mod tidy \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /email-verifier ./main.go
 

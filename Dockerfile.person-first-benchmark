@@ -4,4 +4,4 @@ WORKDIR /app
 COPY requirements-contact-enricher.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY contact_enricher ./contact_enricher
-CMD ["python", "-m", "contact_enricher.person_first_benchmark"]
+CMD ["python", "-m", "contact_enricher.verifalia_smoke_benchmark"]

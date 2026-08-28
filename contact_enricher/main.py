@@ -53,7 +53,7 @@ WEBSITE_ALIASES = {
     "url",
 }
 
-app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.3.1")
+app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.4.0")
 
 
 def require_api_key(request: Request) -> None:
@@ -108,10 +108,8 @@ def read_headers(path: Path) -> list[str]:
 
 def resolve_columns(headers: list[str]) -> tuple[str, str]:
     normalized = {normalize_header(header): header for header in headers if str(header or "").strip()}
-
     company_col = next((normalized[key] for key in COMPANY_ALIASES if key in normalized), "")
     website_col = next((normalized[key] for key in WEBSITE_ALIASES if key in normalized), "")
-
     if not company_col or not website_col:
         raise HTTPException(
             400,
@@ -148,6 +146,74 @@ def read_input(path: Path) -> list[dict]:
     return rows
 
 
+def checkpoint_path(job_id: str) -> Path:
+    return DATA / f"{job_id}-checkpoint.json"
+
+
+def metadata_path(job_id: str) -> Path:
+    return DATA / f"{job_id}-job.json"
+
+
+def save_json_atomic(path: Path, value: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def save_job_metadata(job: dict) -> None:
+    payload = {
+        key: job.get(key)
+        for key in [
+            "id", "owner_id", "status", "completed", "total", "input_path", "positions",
+            "mode", "concurrency", "max_pages", "started_at", "error", "csv", "xlsx"
+        ]
+    }
+    save_json_atomic(metadata_path(str(job["id"])), payload)
+
+
+def load_checkpoint(job_id: str) -> dict[int, dict]:
+    path = checkpoint_path(job_id)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = payload.get("results", {}) if isinstance(payload, dict) else {}
+        return {int(index): result for index, result in raw.items() if isinstance(result, dict)}
+    except Exception:
+        return {}
+
+
+def save_checkpoint(job_id: str, results: dict[int, dict]) -> None:
+    save_json_atomic(
+        checkpoint_path(job_id),
+        {"job_id": job_id, "saved_at": time.time(), "results": {str(k): v for k, v in results.items()}},
+    )
+
+
+def load_job_from_disk(job_id: str) -> dict | None:
+    path = metadata_path(job_id)
+    if not path.exists():
+        return None
+    try:
+        job = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    input_path = Path(str(job.get("input_path") or ""))
+    if not input_path.exists():
+        return None
+    checkpoint = load_checkpoint(job_id)
+    job["completed"] = len(checkpoint)
+    if job.get("status") in {"running", "queued"}:
+        job["status"] = "failed"
+        job["error"] = "The worker restarted. Saved progress is available; start the job again to resume."
+    JOBS[job_id] = job
+    return job
+
+
+def get_job(job_id: str) -> dict | None:
+    return JOBS.get(job_id) or load_job_from_disk(job_id)
+
+
 def write_outputs(job_id: str, rows: list[dict]) -> tuple[Path, Path]:
     csv_path = DATA / f"{job_id}-enriched.csv"
     xlsx_path = DATA / f"{job_id}-enriched.xlsx"
@@ -172,6 +238,23 @@ def write_outputs(job_id: str, rows: list[dict]) -> tuple[Path, Path]:
     return csv_path, xlsx_path
 
 
+def write_partial_csv(job_id: str, rows_by_index: dict[int, dict]) -> Path:
+    path = DATA / f"{job_id}-partial.csv"
+    rows = [rows_by_index[index] for index in sorted(rows_by_index)]
+    if not rows:
+        raise HTTPException(404, "No completed companies are available yet.")
+    fields: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fields:
+                fields.append(key)
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
 def progress_numbers(job: dict) -> tuple[int, int]:
     completed = int(job.get("completed", 0) or 0)
     total = int(job.get("total", 0) or 0)
@@ -188,7 +271,6 @@ def timing_payload(job: dict) -> dict:
     started_at = float(job.get("started_at", 0) or 0)
     mode = str(job.get("mode") or "targeted")
     elapsed = max(0, int(time.time() - started_at)) if started_at else 0
-
     if completed > 0 and elapsed > 0 and total > completed:
         observed_seconds_per_company = elapsed / completed
         observed_seconds_per_company = min(max(observed_seconds_per_company, 2.0), 90.0)
@@ -198,7 +280,6 @@ def timing_payload(job: dict) -> dict:
         eta = max(0, initial_total - elapsed)
     else:
         eta = 0
-
     return {
         "elapsed_seconds": elapsed,
         "eta_seconds": eta,
@@ -216,10 +297,25 @@ async def run_job(
 ):
     try:
         rows = read_input(input_path)
-        JOBS[job_id].update(status="running", total=len(rows), completed=0, started_at=time.time())
+        checkpoint = load_checkpoint(job_id)
+        JOBS[job_id].update(
+            status="running",
+            total=len(rows),
+            completed=len(checkpoint),
+            started_at=time.time(),
+            error="",
+        )
+        save_job_metadata(JOBS[job_id])
 
         def progress(done, total):
             JOBS[job_id].update(completed=done, total=total)
+            save_job_metadata(JOBS[job_id])
+
+        def checkpoint_result(index, result, done, total):
+            checkpoint[index] = result
+            save_checkpoint(job_id, checkpoint)
+            JOBS[job_id].update(completed=done, total=total)
+            save_job_metadata(JOBS[job_id])
 
         results = await enrich_rows(
             rows,
@@ -229,11 +325,21 @@ async def run_job(
             max_pages=max_pages,
             deep_verify=True,
             progress_cb=progress,
+            result_cb=checkpoint_result,
+            existing_results=checkpoint,
         )
         csv_path, xlsx_path = write_outputs(job_id, results)
-        JOBS[job_id].update(status="complete", completed=len(rows), csv=str(csv_path), xlsx=str(xlsx_path))
+        JOBS[job_id].update(
+            status="complete",
+            completed=len(rows),
+            csv=str(csv_path),
+            xlsx=str(xlsx_path),
+            error="",
+        )
+        save_job_metadata(JOBS[job_id])
     except Exception as exc:
         JOBS[job_id].update(status="failed", error=str(exc))
+        save_job_metadata(JOBS[job_id])
 
 
 @app.get("/health")
@@ -241,7 +347,9 @@ def health():
     return {
         "ok": True,
         "service": "chrissa-automates-contact-enricher",
+        "version": "2.4.0",
         "max_companies_per_job": MAX_COMPANIES_PER_JOB,
+        "checkpointing": True,
     }
 
 
@@ -296,7 +404,9 @@ async def stage_job(
         "concurrency": min(max(concurrency, 1), 4),
         "max_pages": min(max(max_pages, 3), 12),
         "started_at": 0,
+        "error": "",
     }
+    save_job_metadata(JOBS[job_id])
     return {
         "id": job_id,
         "status": "staged",
@@ -311,15 +421,19 @@ async def stage_job(
 @app.post("/jobs/{job_id}/start")
 async def start_job(request: Request, job_id: str):
     require_api_key(request)
-    job = JOBS.get(job_id)
+    job = get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
     require_job_owner(request, job)
     if job.get("status") not in {"staged", "failed"}:
         return {"id": job_id, "status": job.get("status"), "total": job.get("total", 0)}
     input_path = Path(job["input_path"])
+    if not input_path.exists():
+        raise HTTPException(404, "The saved input file is no longer available. Upload the batch again.")
     job["status"] = "queued"
     job["started_at"] = time.time()
+    job["error"] = ""
+    save_job_metadata(job)
     asyncio.create_task(
         run_job(
             job_id,
@@ -334,6 +448,7 @@ async def start_job(request: Request, job_id: str):
         "id": job_id,
         "status": "queued",
         "total": job.get("total", 0),
+        "completed": len(load_checkpoint(job_id)),
         "mode": job.get("mode"),
         "estimated_seconds": estimate_job_seconds(int(job.get("total", 0) or 0), str(job.get("mode") or "targeted")),
     }
@@ -342,14 +457,19 @@ async def start_job(request: Request, job_id: str):
 @app.get("/jobs/{job_id}")
 def job_status(request: Request, job_id: str):
     require_api_key(request)
-    job = JOBS.get(job_id)
+    job = get_job(job_id)
     if not job:
-        raise HTTPException(404, "Job not found. Jobs are kept in memory until the service restarts.")
+        raise HTTPException(404, "Job not found.")
     require_job_owner(request, job)
+    checkpointed = len(load_checkpoint(job_id))
+    if checkpointed > int(job.get("completed", 0) or 0):
+        job["completed"] = checkpointed
     return {
         "id": job_id,
         "status": job.get("status"),
         "completed": job.get("completed", 0),
+        "checkpointed": checkpointed,
+        "partial_available": checkpointed > 0,
         "total": job.get("total", 0),
         "mode": job.get("mode", "targeted"),
         "error": job.get("error", ""),
@@ -360,11 +480,19 @@ def job_status(request: Request, job_id: str):
 @app.get("/jobs/{job_id}/download/{kind}")
 def download(request: Request, job_id: str, kind: str):
     require_api_key(request)
-    job = JOBS.get(job_id)
-    if not job or job.get("status") != "complete":
-        raise HTTPException(404, "Output is not ready.")
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found.")
     require_job_owner(request, job)
+
+    if kind == "partial-csv":
+        checkpoint = load_checkpoint(job_id)
+        path = write_partial_csv(job_id, checkpoint)
+        return FileResponse(path, filename=f"chrissa-automates-contact-enricher-{job_id}-partial.csv")
+
+    if job.get("status") != "complete":
+        raise HTTPException(404, "Final output is not ready. Use partial-csv to download completed companies.")
     if kind not in {"csv", "xlsx"}:
-        raise HTTPException(400, "Choose csv or xlsx.")
+        raise HTTPException(400, "Choose csv, xlsx, or partial-csv.")
     path = job.get(kind)
     return FileResponse(path, filename=f"chrissa-automates-contact-enricher-{job_id}.{kind}")

@@ -18,21 +18,70 @@ OBFUSCATED_RE = re.compile(
     re.I,
 )
 ROLE_TERMS = [
-    ("head of marketing", 100), ("vp marketing", 98), ("vice president marketing", 98),
+    ("chief marketing officer", 102), ("cmo", 101), ("head of marketing", 100),
+    ("vp of marketing", 99), ("vp marketing", 98), ("vice president of marketing", 98),
     ("marketing director", 96), ("director of marketing", 96), ("marketing manager", 92),
-    ("head of communications", 91), ("communications director", 90), ("public relations", 89),
-    ("pr manager", 88), ("media relations", 87), ("content marketing", 86),
-    ("content manager", 85), ("editor", 84), ("partnerships", 83),
-    ("business development", 78), ("seo manager", 77), ("digital marketing", 76),
-    ("founder", 70), ("chief executive officer", 69), ("ceo", 68), ("owner", 67),
+    ("growth marketing", 91), ("head of communications", 91), ("communications director", 90),
+    ("director of communications", 90), ("public relations", 89), ("pr manager", 88),
+    ("media relations", 87), ("head of content", 87), ("content director", 86),
+    ("content marketing", 86), ("content manager", 85), ("editor", 84),
+    ("head of partnerships", 84), ("partnerships director", 84), ("partnerships", 83),
+    ("business development", 78), ("head of sales", 82), ("vp of sales", 81),
+    ("sales director", 80), ("director of sales", 80), ("sales manager", 79),
+    ("seo manager", 77), ("seo director", 77), ("digital marketing", 76),
+    ("head of digital", 76), ("founder", 70), ("chief executive officer", 69),
+    ("ceo", 68), ("president", 68), ("owner", 67),
 ]
+CONTACT_GROUP_TERMS = {
+    "marketing": [
+        "chief marketing officer", "cmo", "head of marketing", "vp of marketing",
+        "vice president of marketing", "marketing director", "director of marketing",
+        "marketing manager", "growth marketing", "digital marketing"
+    ],
+    "pr & communications": [
+        "head of communications", "communications director", "director of communications",
+        "communications manager", "public relations", "pr director", "pr manager",
+        "media relations"
+    ],
+    "partnerships & business development": [
+        "head of partnerships", "partnerships director", "partnerships manager",
+        "strategic partnerships", "business development director", "business development manager",
+        "business development"
+    ],
+    "sales": [
+        "head of sales", "vp of sales", "sales director", "director of sales",
+        "sales manager", "commercial director"
+    ],
+    "content & editorial": [
+        "head of content", "content director", "content marketing manager", "content marketing",
+        "content manager", "managing editor", "editor"
+    ],
+    "seo & digital": [
+        "head of digital", "digital marketing director", "digital marketing manager",
+        "digital marketing", "seo director", "seo manager", "head of growth",
+        "growth marketing"
+    ],
+    "leadership / founder": [
+        "founder", "co-founder", "cofounder", "chief executive officer", "ceo",
+        "president", "owner"
+    ],
+}
+SEARCH_GROUP_PHRASES = {
+    "marketing": ["Marketing Director", "Head of Marketing"],
+    "pr & communications": ["Communications Director", "PR Manager"],
+    "partnerships & business development": ["Partnerships Manager", "Business Development Manager"],
+    "sales": ["Sales Director", "Head of Sales"],
+    "content & editorial": ["Content Director", "Content Marketing Manager"],
+    "seo & digital": ["SEO Manager", "Digital Marketing Manager"],
+    "leadership / founder": ["Founder", "CEO"],
+}
 GENERIC_PRIORITY = [
     "marketing", "press", "media", "pr", "communications", "partnerships", "businessdevelopment",
     "business-development", "hello", "contact", "info", "sales"
 ]
 PAGE_HINTS = [
     "contact", "about", "team", "people", "leadership", "press", "media", "news", "partners",
-    "partnership", "marketing", "company"
+    "partnership", "marketing", "sales", "company"
 ]
 USER_AGENT = "ChrissaAutomatesContactEnricher/1.0 (+https://chrissaautomates.com/contact-enricher)"
 
@@ -112,13 +161,20 @@ def email_rank(email: str, domain: str) -> int:
     return score
 
 
+def requested_role_terms(value: str) -> list[str]:
+    clean = (value or "").strip().lower()
+    if not clean:
+        return []
+    return CONTACT_GROUP_TERMS.get(clean, [clean])
+
+
 def role_score(text: str, requested_positions: list[str] | None = None) -> int:
     t = (text or "").lower()
     requested = 0
     for idx, position in enumerate(requested_positions or []):
-        term = position.strip().lower()
-        if term and term in t:
-            requested = max(requested, 140 - min(idx, 20))
+        for term in requested_role_terms(position):
+            if term and term in t:
+                requested = max(requested, 150 - min(idx, 20))
     built_in = max((score for term, score in ROLE_TERMS if term in t), default=0)
     return max(requested, built_in)
 
@@ -278,6 +334,22 @@ def clean_search_result_url(href: str) -> str:
     return href
 
 
+def search_phrases(requested_positions: list[str] | None) -> list[str]:
+    phrases: list[str] = []
+    for item in requested_positions or []:
+        clean = item.strip()
+        if not clean:
+            continue
+        group = SEARCH_GROUP_PHRASES.get(clean.lower())
+        if group:
+            phrases.extend(group)
+        else:
+            phrases.append(clean)
+    if not phrases:
+        phrases = ["Marketing Director", "Head of Marketing", "Partnerships Manager", "Communications Director"]
+    return list(dict.fromkeys(phrases))[:6]
+
+
 async def duckduckgo_decision_makers(
     company: str,
     website: str,
@@ -286,15 +358,14 @@ async def duckduckgo_decision_makers(
 ) -> list[ContactCandidate]:
     """Search public result pages only. LinkedIn result URLs may be saved but are never opened."""
     domain = domain_from_url(website)
-    positions = [p.strip() for p in (requested_positions or []) if p.strip()][:6]
-    if not positions:
-        positions = ["Marketing Director", "Head of Marketing", "Partnerships Manager", "Communications Director"]
+    requested = [p.strip() for p in (requested_positions or []) if p.strip()][:8]
+    phrases = search_phrases(requested)
 
     queries: list[str] = []
-    for position in positions:
+    for position in phrases:
         queries.append(f'"{company}" "{position}" email LinkedIn')
-    if domain and positions:
-        queries.append(f'"{domain}" "{positions[0]}" email')
+    if domain and phrases:
+        queries.append(f'"{domain}" "{phrases[0]}" email')
 
     headers = {"User-Agent": USER_AGENT}
     found: list[ContactCandidate] = []
@@ -312,12 +383,12 @@ async def duckduckgo_decision_makers(
                     title_text = a.get_text(" ", strip=True)
                     snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
                     combined = title_text + " " + snippet
-                    score = role_score(combined, positions)
+                    score = role_score(combined, requested)
                     if score <= 0:
                         continue
                     target_url = clean_search_result_url(a.get("href", ""))
                     linkedin = target_url if "linkedin.com/in/" in target_url.lower() else ""
-                    name, title = infer_name_title(title_text + " | " + snippet, positions)
+                    name, title = infer_name_title(title_text + " | " + snippet, requested)
                     found.append(ContactCandidate(
                         name=name,
                         title=title,

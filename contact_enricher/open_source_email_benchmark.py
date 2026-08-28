@@ -13,9 +13,14 @@ from .open_source_email_scraper import scrape_public_contact_data
 
 
 BATCH_FILE = Path(__file__).with_name("benchmark_batch_106.csv")
-VERIFIER_URL = os.getenv(
+VERIFIER_BASE_URL = os.getenv(
     "EMAIL_VERIFIER_URL",
-    "http://email-verifier.railway.internal/v1/verify",
+    "http://email-verifier.railway.internal:8080",
+).rstrip("/")
+VERIFIER_URL = (
+    VERIFIER_BASE_URL
+    if VERIFIER_BASE_URL.endswith("/v1/verify")
+    else VERIFIER_BASE_URL + "/v1/verify"
 )
 CONCURRENCY = 4
 

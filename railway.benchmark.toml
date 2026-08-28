@@ -1,0 +1,6 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.open-source-email-benchmark"
+
+[deploy]
+restartPolicyType = "NEVER"

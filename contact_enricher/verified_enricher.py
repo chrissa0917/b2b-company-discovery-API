@@ -178,14 +178,25 @@ async def enrich_rows(
     max_pages: int = 12,
     deep_verify: bool = True,
     progress_cb=None,
+    result_cb=None,
+    existing_results: dict[int, dict] | None = None,
 ) -> list[dict]:
     semaphore = asyncio.Semaphore(max(1, min(concurrency, 4)))
     total = len(rows)
-    completed = 0
+    results: list[dict | None] = [None] * total
+    existing_results = existing_results or {}
+    for index, result in existing_results.items():
+        if 0 <= int(index) < total and isinstance(result, dict):
+            results[int(index)] = result
+
+    completed = sum(1 for result in results if result is not None)
     lock = asyncio.Lock()
     company_timeout_seconds = 75 if use_search else 45
 
-    async def one(row: dict):
+    if progress_cb:
+        progress_cb(completed, total)
+
+    async def one(index: int, row: dict):
         nonlocal completed
         async with semaphore:
             try:
@@ -214,9 +225,24 @@ async def enrich_rows(
                     "Error": str(exc)[:250],
                 }
             async with lock:
+                results[index] = result
                 completed += 1
+                if result_cb:
+                    result_cb(index, result, completed, total)
                 if progress_cb:
                     progress_cb(completed, total)
             return result
 
-    return await asyncio.gather(*(one(row) for row in rows))
+    pending = [one(index, row) for index, row in enumerate(rows) if results[index] is None]
+    if pending:
+        await asyncio.gather(*pending)
+
+    return [
+        result if result is not None else {
+            "Company": str(rows[index].get("Company") or ""),
+            "Website URL": str(rows[index].get("Website URL") or ""),
+            "Ready to Email": "NO",
+            "Error": "No result was produced for this company.",
+        }
+        for index, result in enumerate(results)
+    ]

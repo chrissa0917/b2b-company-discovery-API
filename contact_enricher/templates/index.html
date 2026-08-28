@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BuyAndRentRobots Contact Enricher</title>
+<style>
+:root{font-family:Inter,system-ui,sans-serif;color:#171717;background:#f6f3ed}body{margin:0}.wrap{max-width:900px;margin:48px auto;padding:0 20px}.card{background:#fff;border:1px solid #ddd6c8;border-radius:18px;padding:28px;box-shadow:0 10px 30px #0000000c}h1{margin:0 0 8px;font-size:34px}.sub{color:#666;line-height:1.5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:22px 0}.full{grid-column:1/-1}label{display:block;font-weight:650;margin-bottom:7px}input,select{width:100%;box-sizing:border-box;border:1px solid #cfc7ba;border-radius:10px;padding:11px;background:#fff}button{border:0;border-radius:10px;padding:12px 18px;background:#1e1e1e;color:#fff;font-weight:700;cursor:pointer}.note{margin-top:18px;background:#faf8f3;padding:14px;border-radius:10px;font-size:14px;color:#555}.status{margin-top:20px;padding:14px;border:1px solid #ddd6c8;border-radius:10px;display:none}.bar{height:10px;background:#eee7dc;border-radius:10px;overflow:hidden;margin:10px 0}.fill{height:100%;background:#1e1e1e;width:0}.links a{display:inline-block;margin-right:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><div class="wrap"><div class="card">
+<h1>BuyAndRentRobots Contact Enricher</h1>
+<p class="sub">Upload your company CSV/XLSX. The app crawls public company pages, extracts public emails, identifies marketing/PR/content/partnership contacts, checks mail-domain MX records, and uses public DuckDuckGo result snippets as an optional decision-maker layer.</p>
+<form id="form">
+<div class="grid">
+<div class="full"><label>Company file</label><input type="file" name="file" accept=".csv,.xlsx,.xlsm" required></div>
+<div><label>Parallel companies</label><input type="number" name="concurrency" min="1" max="10" value="4"></div>
+<div><label>Max pages per company</label><input type="number" name="max_pages" min="3" max="25" value="12"></div>
+<div class="full"><label><input style="width:auto" type="checkbox" name="use_search" checked> Use free DuckDuckGo search snippets for decision-maker discovery</label></div>
+</div><button type="submit">Start enrichment</button>
+</form>
+<div class="note"><b>Suggested columns:</b> Company, Website, BuyAndRentRobots Listing URL. Pattern-generated addresses are marked <b>D-pattern-only-do-not-auto-send</b> and should be reviewed before outreach.</div>
+<div class="status" id="status"><div id="statusText">Queued</div><div class="bar"><div class="fill" id="fill"></div></div><div class="links" id="links"></div></div>
+</div></div>
+<script>
+const form=document.getElementById('form'),status=document.getElementById('status'),statusText=document.getElementById('statusText'),fill=document.getElementById('fill'),links=document.getElementById('links');
+form.addEventListener('submit',async e=>{e.preventDefault();status.style.display='block';links.innerHTML='';statusText.textContent='Uploading…';const fd=new FormData(form);if(!form.use_search.checked)fd.set('use_search','false');else fd.set('use_search','true');const r=await fetch('/jobs',{method:'POST',body:fd});const j=await r.json();if(!r.ok){statusText.textContent=j.detail||'Error';return}poll(j.id)});
+async function poll(id){const r=await fetch('/jobs/'+id),j=await r.json();const total=j.total||0,done=j.completed||0,pct=total?Math.round(done/total*100):0;fill.style.width=pct+'%';statusText.textContent=`${j.status}: ${done}/${total} (${pct}%)`;if(j.status==='complete'){links.innerHTML=`<a href="/jobs/${id}/download/csv">Download CSV</a><a href="/jobs/${id}/download/xlsx">Download XLSX</a>`;return}if(j.status==='failed'){statusText.textContent='Failed: '+(j.error||'unknown error');return}setTimeout(()=>poll(id),1800)}
+</script></body></html>

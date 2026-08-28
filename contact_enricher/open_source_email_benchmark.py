@@ -23,6 +23,8 @@ VERIFIER_URL = (
     else VERIFIER_BASE_URL + "/v1/verify"
 )
 CONCURRENCY = 4
+BROWSER_FALLBACK = os.getenv("BENCHMARK_BROWSER_FALLBACK", "false").lower() == "true"
+RUN_VERIFICATION = os.getenv("BENCHMARK_VERIFY", "false").lower() == "true"
 
 
 def load_companies() -> list[tuple[str, str]]:
@@ -64,11 +66,15 @@ async def one(
     async with semaphore:
         started = time.perf_counter()
         try:
-            result = await scrape_public_contact_data(
-                website,
-                timeout_seconds=25,
-                depth=1,
-                max_links_from_page=8,
+            result = await asyncio.wait_for(
+                scrape_public_contact_data(
+                    website,
+                    timeout_seconds=12,
+                    depth=1,
+                    max_links_from_page=6,
+                    browser_fallback=BROWSER_FALLBACK,
+                ),
+                timeout=15,
             )
             verification = {
                 "verdict": "not_checked",
@@ -76,7 +82,7 @@ async def one(
                 "error": "",
             }
             primary_email = result.emails[0] if result.emails else ""
-            if primary_email:
+            if RUN_VERIFICATION and primary_email:
                 verification = await verify_email(verifier_client, primary_email)
 
             return {
@@ -130,7 +136,14 @@ async def main() -> None:
     companies = load_companies()
     print(
         "OPEN_SOURCE_EMAIL_BENCHMARK_START "
-        + json.dumps({"batch_size": len(companies), "concurrency": CONCURRENCY}),
+        + json.dumps(
+            {
+                "batch_size": len(companies),
+                "concurrency": CONCURRENCY,
+                "browser_fallback": BROWSER_FALLBACK,
+                "verification": RUN_VERIFICATION,
+            }
+        ),
         flush=True,
     )
 
@@ -177,6 +190,8 @@ async def main() -> None:
         "average_seconds": round(sum(elapsed) / len(elapsed), 2) if elapsed else 0,
         "p95_seconds": elapsed[p95_index] if elapsed else 0,
         "max_seconds": max(elapsed) if elapsed else 0,
+        "browser_fallback_enabled": BROWSER_FALLBACK,
+        "verification_enabled": RUN_VERIFICATION,
     }
     print("OPEN_SOURCE_EMAIL_BENCHMARK_SUMMARY " + json.dumps(summary), flush=True)
 

@@ -11,3 +11,4 @@ playwright==1.55.0
 requests==2.32.5
 Unidecode==1.4.0
 https://github.com/dmitriiweb/extract-emails/archive/1f2bb4008e0231784fd78b4140780a2992f5c851.zip
+https://github.com/deedy5/ddgs/archive/70a5635510fb8d5b15d5ba6ceced6a67e212149b.zip

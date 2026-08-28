@@ -2,7 +2,6 @@ FROM python:3.13-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements-contact-enricher.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir --no-deps https://github.com/m8sec/CrossLinked/archive/2ae8d7bd5b1e9378f45cbf6ed38a3e79ded3acaf.zip
+RUN pip install --no-cache-dir -r requirements.txt
 COPY contact_enricher ./contact_enricher
 CMD ["python", "-m", "contact_enricher.person_first_benchmark"]

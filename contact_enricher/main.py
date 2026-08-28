@@ -21,7 +21,7 @@ DATA = Path(os.getenv("DATA_DIR", BASE / "data"))
 DATA.mkdir(parents=True, exist_ok=True)
 JOBS: dict[str, dict] = {}
 API_KEY = os.getenv("CONTACT_ENRICHER_API_KEY", "")
-MAX_COMPANIES_PER_JOB = 100
+MAX_COMPANIES_PER_JOB = 106
 DEFAULT_POSITIONS = [
     "Marketing Director",
     "Head of Marketing",
@@ -53,7 +53,7 @@ WEBSITE_ALIASES = {
     "url",
 }
 
-app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.3.0")
+app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.3.1")
 
 
 def require_api_key(request: Request) -> None:

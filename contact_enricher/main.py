@@ -21,6 +21,7 @@ DATA = Path(os.getenv("DATA_DIR", BASE / "data"))
 DATA.mkdir(parents=True, exist_ok=True)
 JOBS: dict[str, dict] = {}
 API_KEY = os.getenv("CONTACT_ENRICHER_API_KEY", "")
+MAX_COMPANIES_PER_JOB = 100
 DEFAULT_POSITIONS = [
     "Marketing Director",
     "Head of Marketing",
@@ -52,7 +53,7 @@ WEBSITE_ALIASES = {
     "url",
 }
 
-app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.2.0")
+app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.3.0")
 
 
 def require_api_key(request: Request) -> None:
@@ -178,8 +179,6 @@ def progress_numbers(job: dict) -> tuple[int, int]:
 
 
 def estimate_job_seconds(total: int, mode: str) -> int:
-    # A deliberately conservative first estimate. Once companies finish,
-    # the live ETA below replaces this with the job's observed speed.
     seconds_per_company = 8 if mode == "targeted" else 5
     return max(30, int(total * seconds_per_company))
 
@@ -239,7 +238,11 @@ async def run_job(
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "chrissa-automates-contact-enricher"}
+    return {
+        "ok": True,
+        "service": "chrissa-automates-contact-enricher",
+        "max_companies_per_job": MAX_COMPANIES_PER_JOB,
+    }
 
 
 @app.get("/")
@@ -274,8 +277,11 @@ async def stage_job(
     rows = read_input(input_path)
     if not rows:
         raise HTTPException(400, "We found the right columns, but no rows had both a company name and website.")
-    if len(rows) > 2000:
-        raise HTTPException(400, "Please upload 2,000 companies or fewer per job.")
+    if len(rows) > MAX_COMPANIES_PER_JOB:
+        raise HTTPException(
+            400,
+            f"For now, upload up to {MAX_COMPANIES_PER_JOB} companies at a time. Split larger lists into batches of {MAX_COMPANIES_PER_JOB} so each search stays fast and reliable.",
+        )
 
     requested_positions = parse_positions(positions, mode)
     JOBS[job_id] = {
@@ -287,8 +293,8 @@ async def stage_job(
         "input_path": str(input_path),
         "positions": requested_positions,
         "mode": mode,
-        "concurrency": min(max(concurrency, 1), 8),
-        "max_pages": min(max(max_pages, 3), 20),
+        "concurrency": min(max(concurrency, 1), 4),
+        "max_pages": min(max(max_pages, 3), 12),
         "started_at": 0,
     }
     return {
@@ -297,6 +303,7 @@ async def stage_job(
         "total": len(rows),
         "positions": requested_positions,
         "mode": mode,
+        "max_companies_per_job": MAX_COMPANIES_PER_JOB,
         "estimated_seconds": estimate_job_seconds(len(rows), mode),
     }
 

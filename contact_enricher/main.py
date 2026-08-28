@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hmac
+import json
 import os
 import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse, RedirectResponse
 from openpyxl import Workbook, load_workbook
 
 from .verified_enricher import enrich_rows
@@ -16,10 +17,60 @@ from .verified_enricher import enrich_rows
 BASE = Path(__file__).resolve().parent.parent
 DATA = Path(os.getenv("DATA_DIR", BASE / "data"))
 DATA.mkdir(parents=True, exist_ok=True)
-TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 JOBS: dict[str, dict] = {}
+API_KEY = os.getenv("CONTACT_ENRICHER_API_KEY", "")
+DEFAULT_POSITIONS = [
+    "Marketing Director",
+    "Head of Marketing",
+    "Marketing Manager",
+    "Partnerships Manager",
+    "Communications Director",
+    "PR Manager",
+    "Business Development Manager",
+    "Founder",
+    "CEO",
+]
 
-app = FastAPI(title="BuyAndRentRobots Contact Enricher", version="1.1.0")
+app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.0.0")
+
+
+def require_api_key(request: Request) -> None:
+    supplied = request.headers.get("x-contact-enricher-key", "")
+    if not API_KEY or not supplied or not hmac.compare_digest(supplied, API_KEY):
+        raise HTTPException(401, "Unauthorized")
+
+
+def parse_positions(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return DEFAULT_POSITIONS[:5]
+    try:
+        value = json.loads(raw)
+        if isinstance(value, list):
+            positions = [str(item).strip() for item in value if str(item).strip()]
+            return list(dict.fromkeys(positions))[:8] or DEFAULT_POSITIONS[:5]
+    except Exception:
+        pass
+    positions = [item.strip() for item in raw.replace("\r", "").replace("\n", ",").split(",") if item.strip()]
+    return list(dict.fromkeys(positions))[:8] or DEFAULT_POSITIONS[:5]
+
+
+def read_headers(path: Path) -> list[str]:
+    if path.suffix.lower() == ".csv":
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            return [str(x or "").strip() for x in next(reader, [])]
+    if path.suffix.lower() in {".xlsx", ".xlsm"}:
+        wb = load_workbook(path, read_only=True, data_only=True)
+        ws = wb.active
+        first = next(ws.iter_rows(values_only=True), ())
+        return [str(x or "").strip() for x in first]
+    return []
+
+
+def validate_headers(headers: list[str]) -> None:
+    if headers != ["Company", "Website URL"]:
+        raise HTTPException(400, 'Your file must contain exactly two headers: "Company" and "Website URL".')
 
 
 def read_input(path: Path) -> list[dict]:
@@ -40,7 +91,7 @@ def read_input(path: Path) -> list[dict]:
 def write_outputs(job_id: str, rows: list[dict]) -> tuple[Path, Path]:
     csv_path = DATA / f"{job_id}-enriched.csv"
     xlsx_path = DATA / f"{job_id}-enriched.xlsx"
-    fields = []
+    fields: list[str] = []
     for row in rows:
         for key in row.keys():
             if key not in fields:
@@ -61,13 +112,29 @@ def write_outputs(job_id: str, rows: list[dict]) -> tuple[Path, Path]:
     return csv_path, xlsx_path
 
 
-async def run_job(job_id: str, input_path: Path, concurrency: int, use_search: bool, max_pages: int, deep_verify: bool):
+async def run_job(
+    job_id: str,
+    input_path: Path,
+    concurrency: int,
+    requested_positions: list[str],
+    max_pages: int,
+):
     try:
         rows = read_input(input_path)
         JOBS[job_id].update(status="running", total=len(rows), completed=0)
+
         def progress(done, total):
             JOBS[job_id].update(completed=done, total=total)
-        results = await enrich_rows(rows, concurrency=concurrency, use_search=use_search, max_pages=max_pages, deep_verify=deep_verify, progress_cb=progress)
+
+        results = await enrich_rows(
+            rows,
+            requested_positions=requested_positions,
+            concurrency=concurrency,
+            use_search=True,
+            max_pages=max_pages,
+            deep_verify=True,
+            progress_cb=progress,
+        )
         csv_path, xlsx_path = write_outputs(job_id, results)
         JOBS[job_id].update(status="complete", completed=len(rows), csv=str(csv_path), xlsx=str(xlsx_path))
     except Exception as exc:
@@ -76,46 +143,100 @@ async def run_job(job_id: str, input_path: Path, concurrency: int, use_search: b
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "service": "chrissa-automates-contact-enricher"}
 
 
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return TEMPLATES.TemplateResponse("index.html", {"request": request})
+@app.get("/")
+def home():
+    return RedirectResponse("https://chrissaautomates.com/contact-enricher", status_code=302)
 
 
-@app.post("/jobs")
-async def create_job(
+@app.post("/jobs/stage")
+async def stage_job(
+    request: Request,
     file: UploadFile = File(...),
+    positions: str = Form(""),
     concurrency: int = Form(4),
-    use_search: bool = Form(True),
     max_pages: int = Form(12),
-    deep_verify: bool = Form(True),
 ):
+    require_api_key(request)
     suffix = Path(file.filename or "input.csv").suffix.lower()
     if suffix not in {".csv", ".xlsx", ".xlsm"}:
         raise HTTPException(400, "Upload a CSV or XLSX file.")
+
     job_id = uuid.uuid4().hex[:12]
     input_path = DATA / f"{job_id}-input{suffix}"
     input_path.write_bytes(await file.read())
-    JOBS[job_id] = {"id": job_id, "status": "queued", "completed": 0, "total": 0}
-    asyncio.create_task(run_job(job_id, input_path, min(max(concurrency, 1), 10), bool(use_search), min(max(max_pages, 3), 25), bool(deep_verify)))
-    return JOBS[job_id]
+    validate_headers(read_headers(input_path))
+    rows = read_input(input_path)
+    if not rows:
+        raise HTTPException(400, "Your file has no company rows.")
+    if len(rows) > 2000:
+        raise HTTPException(400, "Please upload 2,000 companies or fewer per job.")
+
+    requested_positions = parse_positions(positions)
+    JOBS[job_id] = {
+        "id": job_id,
+        "status": "staged",
+        "completed": 0,
+        "total": len(rows),
+        "input_path": str(input_path),
+        "positions": requested_positions,
+        "concurrency": min(max(concurrency, 1), 8),
+        "max_pages": min(max(max_pages, 3), 20),
+    }
+    return {
+        "id": job_id,
+        "status": "staged",
+        "total": len(rows),
+        "positions": requested_positions,
+    }
+
+
+@app.post("/jobs/{job_id}/start")
+async def start_job(request: Request, job_id: str):
+    require_api_key(request)
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.get("status") not in {"staged", "failed"}:
+        return {"id": job_id, "status": job.get("status"), "total": job.get("total", 0)}
+    input_path = Path(job["input_path"])
+    job["status"] = "queued"
+    asyncio.create_task(
+        run_job(
+            job_id,
+            input_path,
+            int(job.get("concurrency", 4)),
+            list(job.get("positions") or DEFAULT_POSITIONS[:5]),
+            int(job.get("max_pages", 12)),
+        )
+    )
+    return {"id": job_id, "status": "queued", "total": job.get("total", 0)}
 
 
 @app.get("/jobs/{job_id}")
-def job_status(job_id: str):
-    if job_id not in JOBS:
+def job_status(request: Request, job_id: str):
+    require_api_key(request)
+    job = JOBS.get(job_id)
+    if not job:
         raise HTTPException(404, "Job not found. Jobs are kept in memory until the service restarts.")
-    return JOBS[job_id]
+    return {
+        "id": job_id,
+        "status": job.get("status"),
+        "completed": job.get("completed", 0),
+        "total": job.get("total", 0),
+        "error": job.get("error", ""),
+    }
 
 
 @app.get("/jobs/{job_id}/download/{kind}")
-def download(job_id: str, kind: str):
+def download(request: Request, job_id: str, kind: str):
+    require_api_key(request)
     job = JOBS.get(job_id)
     if not job or job.get("status") != "complete":
         raise HTTPException(404, "Output is not ready.")
     if kind not in {"csv", "xlsx"}:
         raise HTTPException(400, "Choose csv or xlsx.")
     path = job.get(kind)
-    return FileResponse(path, filename=Path(path).name)
+    return FileResponse(path, filename=f"chrissa-automates-contact-enricher-{job_id}.{kind}")

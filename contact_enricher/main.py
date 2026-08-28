@@ -40,6 +40,13 @@ def require_api_key(request: Request) -> None:
         raise HTTPException(401, "Unauthorized")
 
 
+def require_job_owner(request: Request, job: dict) -> None:
+    supplied = request.headers.get("x-contact-enricher-user", "")
+    owner = str(job.get("owner_id") or "")
+    if not owner or not supplied or not hmac.compare_digest(supplied, owner):
+        raise HTTPException(403, "This job belongs to a different account.")
+
+
 def parse_positions(raw: str) -> list[str]:
     raw = (raw or "").strip()
     if not raw:
@@ -155,11 +162,15 @@ def home():
 async def stage_job(
     request: Request,
     file: UploadFile = File(...),
+    owner_id: str = Form(...),
     positions: str = Form(""),
     concurrency: int = Form(4),
     max_pages: int = Form(12),
 ):
     require_api_key(request)
+    owner_id = owner_id.strip()
+    if not owner_id:
+        raise HTTPException(400, "Missing account owner.")
     suffix = Path(file.filename or "input.csv").suffix.lower()
     if suffix not in {".csv", ".xlsx", ".xlsm"}:
         raise HTTPException(400, "Upload a CSV or XLSX file.")
@@ -177,6 +188,7 @@ async def stage_job(
     requested_positions = parse_positions(positions)
     JOBS[job_id] = {
         "id": job_id,
+        "owner_id": owner_id,
         "status": "staged",
         "completed": 0,
         "total": len(rows),
@@ -199,6 +211,7 @@ async def start_job(request: Request, job_id: str):
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    require_job_owner(request, job)
     if job.get("status") not in {"staged", "failed"}:
         return {"id": job_id, "status": job.get("status"), "total": job.get("total", 0)}
     input_path = Path(job["input_path"])
@@ -221,6 +234,7 @@ def job_status(request: Request, job_id: str):
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found. Jobs are kept in memory until the service restarts.")
+    require_job_owner(request, job)
     return {
         "id": job_id,
         "status": job.get("status"),
@@ -236,6 +250,7 @@ def download(request: Request, job_id: str, kind: str):
     job = JOBS.get(job_id)
     if not job or job.get("status") != "complete":
         raise HTTPException(404, "Output is not ready.")
+    require_job_owner(request, job)
     if kind not in {"csv", "xlsx"}:
         raise HTTPException(400, "Choose csv or xlsx.")
     path = job.get(kind)

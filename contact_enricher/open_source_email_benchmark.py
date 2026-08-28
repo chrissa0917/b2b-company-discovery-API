@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
+import io
 import json
 import sys
 import time
@@ -101,6 +103,39 @@ async def one(company: str, website: str, semaphore: asyncio.Semaphore) -> dict:
         }
 
 
+def emit_csv(results: list[dict]) -> None:
+    output = io.StringIO(newline="")
+    fieldnames = [
+        "Company",
+        "Website URL",
+        "Status",
+        "Elapsed Seconds",
+        "Primary Email",
+        "All Emails Found",
+        "LinkedIn URLs",
+        "Pages Checked",
+        "Rejected External Emails",
+        "Error",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in results:
+        writer.writerow({
+            "Company": row.get("company", ""),
+            "Website URL": row.get("website", ""),
+            "Status": row.get("status", ""),
+            "Elapsed Seconds": row.get("elapsed_seconds", ""),
+            "Primary Email": row.get("primary_email", ""),
+            "All Emails Found": "; ".join(row.get("emails") or []),
+            "LinkedIn URLs": "; ".join(row.get("linkedin_urls") or []),
+            "Pages Checked": "; ".join(row.get("pages_checked") or []),
+            "Rejected External Emails": "; ".join(row.get("rejected_external_emails") or []),
+            "Error": row.get("error", ""),
+        })
+    encoded = base64.b64encode(output.getvalue().encode("utf-8-sig")).decode("ascii")
+    print("OPEN_SOURCE_EMAIL_BENCHMARK_CSV_BASE64 " + encoded, flush=True)
+
+
 async def main() -> None:
     companies = load_companies()
     print(
@@ -148,6 +183,7 @@ async def main() -> None:
         "hard_process_timeout_seconds": HARD_TIMEOUT_SECONDS,
     }
     print("OPEN_SOURCE_EMAIL_BENCHMARK_SUMMARY " + json.dumps(summary), flush=True)
+    emit_csv(results)
 
 
 if __name__ == "__main__":

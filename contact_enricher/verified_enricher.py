@@ -124,8 +124,6 @@ async def enrich_record(
         if use_search and company and positions else []
     )
 
-    # The free company-email mode deliberately avoids person-level enrichment.
-    # Named people, role matching and professional profile links are reserved for targeted searches.
     contacts = [] if basic_company_mode else dedupe_contacts(search_contacts + site_contacts)
     best_contact = contacts[0] if contacts else None
 
@@ -181,26 +179,38 @@ async def enrich_rows(
     deep_verify: bool = True,
     progress_cb=None,
 ) -> list[dict]:
-    semaphore = asyncio.Semaphore(max(1, min(concurrency, 10)))
+    semaphore = asyncio.Semaphore(max(1, min(concurrency, 4)))
     total = len(rows)
     completed = 0
     lock = asyncio.Lock()
+    company_timeout_seconds = 75 if use_search else 45
 
     async def one(row: dict):
         nonlocal completed
         async with semaphore:
             try:
-                result = await enrich_record(
-                    row,
-                    requested_positions=requested_positions,
-                    use_search=use_search,
-                    max_pages=max_pages,
-                    deep_verify=deep_verify,
+                result = await asyncio.wait_for(
+                    enrich_record(
+                        row,
+                        requested_positions=requested_positions,
+                        use_search=use_search,
+                        max_pages=max_pages,
+                        deep_verify=deep_verify,
+                    ),
+                    timeout=company_timeout_seconds,
                 )
+            except asyncio.TimeoutError:
+                result = {
+                    "Company": str(row.get("Company") or ""),
+                    "Website URL": str(row.get("Website URL") or ""),
+                    "Ready to Email": "NO",
+                    "Error": f"This company took longer than {company_timeout_seconds} seconds, so it was skipped and the batch continued.",
+                }
             except Exception as exc:
                 result = {
                     "Company": str(row.get("Company") or ""),
                     "Website URL": str(row.get("Website URL") or ""),
+                    "Ready to Email": "NO",
                     "Error": str(exc)[:250],
                 }
             async with lock:

@@ -44,6 +44,10 @@ LINKEDIN_PROFILE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Chromium is intentionally serialized. Four concurrent full browsers consumed too
+# much memory in the 106-company benchmark and could leave Playwright tasks stuck.
+_CHROMIUM_SEMAPHORE = asyncio.Semaphore(1)
+
 
 @dataclass
 class ScrapedContactData:
@@ -224,8 +228,8 @@ async def scrape_public_contact_data(
     """Website email extraction powered by the pinned dmitriiweb/extract-emails project.
 
     Fast path uses its HttpxBrowser, AdvancedEmailExtractor, LinkedinExtractor and
-    ContactInfoLinkFilter. If no same-domain email is found, its ChromiumBrowser is
-    used as a short JavaScript fallback. Our wrapper adds strict company-domain and
+    ContactInfoLinkFilter. Chromium is reserved for sites where the HTTP pass could
+    not read enough useful pages. Our wrapper adds strict company-domain and
     placeholder filters, validates LinkedIn profile URLs, and stops immediately on
     the first useful company email.
     """
@@ -248,16 +252,26 @@ async def scrape_public_contact_data(
     if result.emails or not browser_fallback:
         return result
 
+    # If HTTP already crawled two or more useful pages, the site was readable and
+    # simply did not publish a same-domain email. Launching a full browser is then
+    # expensive with little expected value. Reserve Chromium for blocked/JS-heavy
+    # sites where HTTP produced zero or one useful page.
+    if len(result.pages_checked) > 1:
+        return result
+
     async def _chromium_run():
-        async with ChromiumBrowser(headless=True) as browser:
-            return await _focused_scrape(
-                website,
-                browser,
-                max_contact_pages=min(max_contact_pages, 4),
-            )
+        async with _CHROMIUM_SEMAPHORE:
+            async with ChromiumBrowser(headless=True) as browser:
+                return await _focused_scrape(
+                    website,
+                    browser,
+                    max_contact_pages=2,
+                )
 
     try:
-        browser_result = await asyncio.wait_for(_chromium_run(), timeout=min(timeout_seconds, 12))
+        browser_result = await asyncio.wait_for(
+            _chromium_run(), timeout=min(timeout_seconds, 10)
+        )
     except Exception:
         return result
 

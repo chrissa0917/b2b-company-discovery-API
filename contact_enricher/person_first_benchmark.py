@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 
-from .crosslinked_people import enrich_person_crosslinked
+from .ddgs_people import enrich_person_ddgs
 
 CASES = [
     {"Company": "RobotsInternational.com", "Website URL": "https://www.robotsinternational.com"},
@@ -27,17 +27,15 @@ POSITIONS = [
 
 
 async def main() -> None:
-    # CrossLinked opens Google/Bing searches itself. Keep concurrency low so the
-    # benchmark does not look like a bursty bot to the search engines.
-    semaphore = asyncio.Semaphore(2)
+    semaphore = asyncio.Semaphore(3)
 
     async def run_one(row: dict) -> dict:
         async with semaphore:
             started = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
-                    enrich_person_crosslinked(row["Company"], row["Website URL"], POSITIONS),
-                    timeout=15,
+                    enrich_person_ddgs(row["Company"], row["Website URL"], POSITIONS),
+                    timeout=16,
                 )
                 result["Elapsed Seconds"] = round(time.perf_counter() - started, 2)
                 return result

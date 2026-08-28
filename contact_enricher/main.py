@@ -5,6 +5,8 @@ import csv
 import hmac
 import json
 import os
+import re
+import time
 import uuid
 from pathlib import Path
 
@@ -31,7 +33,26 @@ DEFAULT_POSITIONS = [
     "CEO",
 ]
 
-app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.1.0")
+COMPANY_ALIASES = {
+    "company",
+    "company name",
+    "companyname",
+    "business",
+    "business name",
+    "organization",
+    "organisation",
+}
+WEBSITE_ALIASES = {
+    "website url",
+    "website",
+    "websiteurl",
+    "company website",
+    "companywebsite",
+    "domain",
+    "url",
+}
+
+app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.2.0")
 
 
 def require_api_key(request: Request) -> None:
@@ -64,6 +85,13 @@ def parse_positions(raw: str, mode: str) -> list[str]:
     return list(dict.fromkeys(positions))[:8] or DEFAULT_POSITIONS[:5]
 
 
+def normalize_header(value: str) -> str:
+    value = str(value or "").strip().lower()
+    value = re.sub(r"[_\-]+", " ", value)
+    value = re.sub(r"[^a-z0-9 ]+", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def read_headers(path: Path) -> list[str]:
     if path.suffix.lower() == ".csv":
         with path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -77,12 +105,21 @@ def read_headers(path: Path) -> list[str]:
     return []
 
 
-def validate_headers(headers: list[str]) -> None:
-    if headers != ["Company", "Website URL"]:
-        raise HTTPException(400, 'Your file must contain exactly two headers: "Company" and "Website URL".')
+def resolve_columns(headers: list[str]) -> tuple[str, str]:
+    normalized = {normalize_header(header): header for header in headers if str(header or "").strip()}
+
+    company_col = next((normalized[key] for key in COMPANY_ALIASES if key in normalized), "")
+    website_col = next((normalized[key] for key in WEBSITE_ALIASES if key in normalized), "")
+
+    if not company_col or not website_col:
+        raise HTTPException(
+            400,
+            'We could not find your company and website columns. Use names like "Company" / "Website URL" or "company_name" / "website_url". Extra columns are okay.',
+        )
+    return company_col, website_col
 
 
-def read_input(path: Path) -> list[dict]:
+def read_raw_input(path: Path) -> list[dict]:
     if path.suffix.lower() == ".csv":
         with path.open("r", encoding="utf-8-sig", newline="") as f:
             return list(csv.DictReader(f))
@@ -95,6 +132,19 @@ def read_input(path: Path) -> list[dict]:
         headers = [str(x or "").strip() for x in rows[0]]
         return [dict(zip(headers, ["" if x is None else x for x in row])) for row in rows[1:]]
     raise ValueError("Only CSV and XLSX files are supported.")
+
+
+def read_input(path: Path) -> list[dict]:
+    headers = read_headers(path)
+    company_col, website_col = resolve_columns(headers)
+    raw_rows = read_raw_input(path)
+    rows: list[dict] = []
+    for raw in raw_rows:
+        company = str(raw.get(company_col, "") or "").strip()
+        website = str(raw.get(website_col, "") or "").strip()
+        if company and website:
+            rows.append({"Company": company, "Website URL": website})
+    return rows
 
 
 def write_outputs(job_id: str, rows: list[dict]) -> tuple[Path, Path]:
@@ -121,6 +171,42 @@ def write_outputs(job_id: str, rows: list[dict]) -> tuple[Path, Path]:
     return csv_path, xlsx_path
 
 
+def progress_numbers(job: dict) -> tuple[int, int]:
+    completed = int(job.get("completed", 0) or 0)
+    total = int(job.get("total", 0) or 0)
+    return completed, total
+
+
+def estimate_job_seconds(total: int, mode: str) -> int:
+    # A deliberately conservative first estimate. Once companies finish,
+    # the live ETA below replaces this with the job's observed speed.
+    seconds_per_company = 8 if mode == "targeted" else 5
+    return max(30, int(total * seconds_per_company))
+
+
+def timing_payload(job: dict) -> dict:
+    completed, total = progress_numbers(job)
+    started_at = float(job.get("started_at", 0) or 0)
+    mode = str(job.get("mode") or "targeted")
+    elapsed = max(0, int(time.time() - started_at)) if started_at else 0
+
+    if completed > 0 and elapsed > 0 and total > completed:
+        observed_seconds_per_company = elapsed / completed
+        observed_seconds_per_company = min(max(observed_seconds_per_company, 2.0), 90.0)
+        eta = int(observed_seconds_per_company * (total - completed))
+    elif total > completed:
+        initial_total = estimate_job_seconds(total, mode)
+        eta = max(0, initial_total - elapsed)
+    else:
+        eta = 0
+
+    return {
+        "elapsed_seconds": elapsed,
+        "eta_seconds": eta,
+        "percent": round((completed / total) * 100) if total else 0,
+    }
+
+
 async def run_job(
     job_id: str,
     input_path: Path,
@@ -131,7 +217,7 @@ async def run_job(
 ):
     try:
         rows = read_input(input_path)
-        JOBS[job_id].update(status="running", total=len(rows), completed=0)
+        JOBS[job_id].update(status="running", total=len(rows), completed=0, started_at=time.time())
 
         def progress(done, total):
             JOBS[job_id].update(completed=done, total=total)
@@ -185,10 +271,9 @@ async def stage_job(
     job_id = uuid.uuid4().hex[:12]
     input_path = DATA / f"{job_id}-input{suffix}"
     input_path.write_bytes(await file.read())
-    validate_headers(read_headers(input_path))
     rows = read_input(input_path)
     if not rows:
-        raise HTTPException(400, "Your file has no company rows.")
+        raise HTTPException(400, "We found the right columns, but no rows had both a company name and website.")
     if len(rows) > 2000:
         raise HTTPException(400, "Please upload 2,000 companies or fewer per job.")
 
@@ -204,6 +289,7 @@ async def stage_job(
         "mode": mode,
         "concurrency": min(max(concurrency, 1), 8),
         "max_pages": min(max(max_pages, 3), 20),
+        "started_at": 0,
     }
     return {
         "id": job_id,
@@ -211,6 +297,7 @@ async def stage_job(
         "total": len(rows),
         "positions": requested_positions,
         "mode": mode,
+        "estimated_seconds": estimate_job_seconds(len(rows), mode),
     }
 
 
@@ -225,6 +312,7 @@ async def start_job(request: Request, job_id: str):
         return {"id": job_id, "status": job.get("status"), "total": job.get("total", 0)}
     input_path = Path(job["input_path"])
     job["status"] = "queued"
+    job["started_at"] = time.time()
     asyncio.create_task(
         run_job(
             job_id,
@@ -235,7 +323,13 @@ async def start_job(request: Request, job_id: str):
             str(job.get("mode") or "targeted"),
         )
     )
-    return {"id": job_id, "status": "queued", "total": job.get("total", 0), "mode": job.get("mode")}
+    return {
+        "id": job_id,
+        "status": "queued",
+        "total": job.get("total", 0),
+        "mode": job.get("mode"),
+        "estimated_seconds": estimate_job_seconds(int(job.get("total", 0) or 0), str(job.get("mode") or "targeted")),
+    }
 
 
 @app.get("/jobs/{job_id}")
@@ -252,6 +346,7 @@ def job_status(request: Request, job_id: str):
         "total": job.get("total", 0),
         "mode": job.get("mode", "targeted"),
         "error": job.get("error", ""),
+        **timing_payload(job),
     }
 
 

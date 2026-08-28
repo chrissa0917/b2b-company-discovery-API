@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from openpyxl import Workbook, load_workbook
 
-from .enricher import enrich_rows
+from .verified_enricher import enrich_rows
 
 BASE = Path(__file__).resolve().parent.parent
 DATA = Path(os.getenv("DATA_DIR", BASE / "data"))
@@ -19,7 +19,7 @@ DATA.mkdir(parents=True, exist_ok=True)
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 JOBS: dict[str, dict] = {}
 
-app = FastAPI(title="BuyAndRentRobots Contact Enricher", version="1.0.0")
+app = FastAPI(title="BuyAndRentRobots Contact Enricher", version="1.1.0")
 
 
 def read_input(path: Path) -> list[dict]:
@@ -61,13 +61,13 @@ def write_outputs(job_id: str, rows: list[dict]) -> tuple[Path, Path]:
     return csv_path, xlsx_path
 
 
-async def run_job(job_id: str, input_path: Path, concurrency: int, use_search: bool, max_pages: int):
+async def run_job(job_id: str, input_path: Path, concurrency: int, use_search: bool, max_pages: int, deep_verify: bool):
     try:
         rows = read_input(input_path)
         JOBS[job_id].update(status="running", total=len(rows), completed=0)
         def progress(done, total):
             JOBS[job_id].update(completed=done, total=total)
-        results = await enrich_rows(rows, concurrency=concurrency, use_search=use_search, max_pages=max_pages, progress_cb=progress)
+        results = await enrich_rows(rows, concurrency=concurrency, use_search=use_search, max_pages=max_pages, deep_verify=deep_verify, progress_cb=progress)
         csv_path, xlsx_path = write_outputs(job_id, results)
         JOBS[job_id].update(status="complete", completed=len(rows), csv=str(csv_path), xlsx=str(xlsx_path))
     except Exception as exc:
@@ -90,6 +90,7 @@ async def create_job(
     concurrency: int = Form(4),
     use_search: bool = Form(True),
     max_pages: int = Form(12),
+    deep_verify: bool = Form(True),
 ):
     suffix = Path(file.filename or "input.csv").suffix.lower()
     if suffix not in {".csv", ".xlsx", ".xlsm"}:
@@ -98,7 +99,7 @@ async def create_job(
     input_path = DATA / f"{job_id}-input{suffix}"
     input_path.write_bytes(await file.read())
     JOBS[job_id] = {"id": job_id, "status": "queued", "completed": 0, "total": 0}
-    asyncio.create_task(run_job(job_id, input_path, min(max(concurrency, 1), 10), bool(use_search), min(max(max_pages, 3), 25)))
+    asyncio.create_task(run_job(job_id, input_path, min(max(concurrency, 1), 10), bool(use_search), min(max(max_pages, 3), 25), bool(deep_verify)))
     return JOBS[job_id]
 
 

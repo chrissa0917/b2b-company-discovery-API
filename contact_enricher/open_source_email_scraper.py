@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from extract_emails import DefaultWorker
-from extract_emails.browsers import HttpxBrowser
-from extract_emails.data_extractors.advanced_email_extractor import AdvancedEmailExtractor
+from extract_emails.browsers import ChromiumBrowser, HttpxBrowser
 from extract_emails.data_extractors import LinkedinExtractor
+from extract_emails.data_extractors.advanced_email_extractor import AdvancedEmailExtractor
+from extract_emails.link_filters import ContactInfoLinkFilter
 
 
 PLACEHOLDER_DOMAINS = {
@@ -29,6 +30,17 @@ PLACEHOLDER_LOCALS = {
     "example",
     "email",
 }
+CONTACT_LINK_HINTS = [
+    "about",
+    "contact",
+    "press",
+    "media",
+    "team",
+    "people",
+    "leadership",
+    "investor",
+    "support",
+]
 
 
 @dataclass
@@ -36,6 +48,7 @@ class ScrapedContactData:
     emails: list[str]
     linkedin_urls: list[str]
     pages_checked: list[str]
+    used_browser_fallback: bool = False
 
 
 def _domain_from_url(value: str) -> str:
@@ -49,8 +62,7 @@ def _domain_from_url(value: str) -> str:
 
 
 def _clean_email(value: str) -> str:
-    value = (value or "").strip().lower().strip(".,;:<>[](){}\"'")
-    return value
+    return (value or "").strip().lower().strip(".,;:<>[](){}\"'")
 
 
 def _is_placeholder(email: str) -> bool:
@@ -73,35 +85,7 @@ def _same_company_domain(email: str, website_domain: str) -> bool:
     return email_domain == website_domain or email_domain.endswith("." + website_domain)
 
 
-async def scrape_public_contact_data(
-    website: str,
-    *,
-    timeout_seconds: int = 25,
-    depth: int = 1,
-    max_links_from_page: int = 8,
-) -> ScrapedContactData:
-    """Use dmitriiweb/extract-emails as the primary website email extractor.
-
-    The upstream project handles contact/about link discovery, ordinary emails,
-    common obfuscation, Cloudflare-protected addresses, and LinkedIn URLs.
-    This adapter adds strict placeholder filtering and company-domain ranking.
-    """
-
-    website_domain = _domain_from_url(website)
-
-    async def _run():
-        async with HttpxBrowser() as browser:
-            worker = DefaultWorker(
-                website,
-                browser,
-                data_extractors=[AdvancedEmailExtractor(), LinkedinExtractor()],
-                depth=depth,
-                max_links_from_page=max_links_from_page,
-            )
-            return await worker.aget_data()
-
-    pages = await asyncio.wait_for(_run(), timeout=timeout_seconds)
-
+def _collect(pages: list, website_domain: str) -> ScrapedContactData:
     emails: list[str] = []
     linkedin_urls: list[str] = []
     pages_checked: list[str] = []
@@ -128,9 +112,102 @@ async def scrape_public_contact_data(
             seen_linkedin.add(url)
             linkedin_urls.append(url)
 
-    emails.sort(key=lambda item: (1 if _same_company_domain(item, website_domain) else 0, item), reverse=True)
+    emails.sort(
+        key=lambda item: (1 if _same_company_domain(item, website_domain) else 0, item),
+        reverse=True,
+    )
     return ScrapedContactData(
         emails=emails,
         linkedin_urls=linkedin_urls,
         pages_checked=pages_checked,
+    )
+
+
+async def _scrape_with_browser(
+    website: str,
+    browser,
+    *,
+    depth: int,
+    max_links_from_page: int,
+) -> list:
+    link_filter = ContactInfoLinkFilter(
+        website,
+        contruct_candidates=CONTACT_LINK_HINTS,
+        use_default=False,
+    )
+    worker = DefaultWorker(
+        website,
+        browser,
+        link_filter=link_filter,
+        data_extractors=[AdvancedEmailExtractor(), LinkedinExtractor()],
+        depth=depth,
+        max_links_from_page=max_links_from_page,
+    )
+    return await worker.aget_data()
+
+
+async def scrape_public_contact_data(
+    website: str,
+    *,
+    timeout_seconds: int = 25,
+    depth: int = 1,
+    max_links_from_page: int = 8,
+    browser_fallback: bool = True,
+) -> ScrapedContactData:
+    """Use dmitriiweb/extract-emails as the website email extraction engine.
+
+    Fast path: the upstream async HTTP browser plus its advanced email extractor.
+    Fallback: the upstream Playwright/Chromium browser only when HTTP finds no email.
+    Our wrapper expands contact-page hints and rejects obvious placeholder emails.
+    """
+
+    website_domain = _domain_from_url(website)
+
+    async def _http_run():
+        async with HttpxBrowser() as browser:
+            return await _scrape_with_browser(
+                website,
+                browser,
+                depth=depth,
+                max_links_from_page=max_links_from_page,
+            )
+
+    http_pages = await asyncio.wait_for(_http_run(), timeout=timeout_seconds)
+    result = _collect(http_pages, website_domain)
+    if result.emails or not browser_fallback:
+        return result
+
+    async def _chromium_run():
+        async with ChromiumBrowser(headless=True) as browser:
+            return await _scrape_with_browser(
+                website,
+                browser,
+                depth=depth,
+                max_links_from_page=max_links_from_page,
+            )
+
+    try:
+        browser_pages = await asyncio.wait_for(
+            _chromium_run(),
+            timeout=min(timeout_seconds, 20),
+        )
+    except Exception:
+        return result
+
+    browser_result = _collect(browser_pages, website_domain)
+    if not browser_result.emails and not browser_result.linkedin_urls:
+        return result
+
+    merged_pages = list(dict.fromkeys(result.pages_checked + browser_result.pages_checked))
+    merged_emails = list(dict.fromkeys(result.emails + browser_result.emails))
+    merged_linkedin = list(dict.fromkeys(result.linkedin_urls + browser_result.linkedin_urls))
+    merged_emails.sort(
+        key=lambda item: (1 if _same_company_domain(item, website_domain) else 0, item),
+        reverse=True,
+    )
+    return ScrapedContactData(
+        emails=merged_emails,
+        linkedin_urls=merged_linkedin,
+        pages_checked=merged_pages,
+        used_browser_fallback=True,
     )

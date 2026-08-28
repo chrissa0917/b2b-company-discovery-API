@@ -39,8 +39,11 @@ CONTACT_LINK_HINTS = [
     "people",
     "leadership",
     "investor",
-    "support",
 ]
+LINKEDIN_PROFILE_RE = re.compile(
+    r"^https?://(?:[a-z]{2,3}\.)?linkedin\.com/in/[A-Za-z0-9%._-]+/?$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -49,6 +52,7 @@ class ScrapedContactData:
     linkedin_urls: list[str]
     pages_checked: list[str]
     used_browser_fallback: bool = False
+    rejected_external_emails: list[str] | None = None
 
 
 def _domain_from_url(value: str) -> str:
@@ -85,11 +89,26 @@ def _same_company_domain(email: str, website_domain: str) -> bool:
     return email_domain == website_domain or email_domain.endswith("." + website_domain)
 
 
+def _clean_linkedin_url(value: str) -> str:
+    value = (value or "").strip().strip("\"'\\,;<>[](){}")
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+    if LINKEDIN_PROFILE_RE.fullmatch(clean):
+        return clean
+    return ""
+
+
 def _collect(pages: list, website_domain: str) -> ScrapedContactData:
     emails: list[str] = []
+    external_emails: list[str] = []
     linkedin_urls: list[str] = []
     pages_checked: list[str] = []
     seen_emails: set[str] = set()
+    seen_external: set[str] = set()
     seen_linkedin: set[str] = set()
 
     for page in pages:
@@ -100,26 +119,31 @@ def _collect(pages: list, website_domain: str) -> ScrapedContactData:
         data = getattr(page, "data", {}) or {}
         for raw in data.get("email", []) or []:
             email = _clean_email(str(raw))
-            if not email or _is_placeholder(email) or email in seen_emails:
+            if not email or _is_placeholder(email):
+                continue
+            if not _same_company_domain(email, website_domain):
+                if email not in seen_external:
+                    seen_external.add(email)
+                    external_emails.append(email)
+                continue
+            if email in seen_emails:
                 continue
             seen_emails.add(email)
             emails.append(email)
 
         for raw in data.get("linkedin", []) or []:
-            url = str(raw or "").strip()
+            url = _clean_linkedin_url(str(raw or ""))
             if not url or url in seen_linkedin:
                 continue
             seen_linkedin.add(url)
             linkedin_urls.append(url)
 
-    emails.sort(
-        key=lambda item: (1 if _same_company_domain(item, website_domain) else 0, item),
-        reverse=True,
-    )
+    emails.sort()
     return ScrapedContactData(
         emails=emails,
         linkedin_urls=linkedin_urls,
         pages_checked=pages_checked,
+        rejected_external_emails=external_emails,
     )
 
 
@@ -141,7 +165,7 @@ async def _scrape_with_browser(
         link_filter=link_filter,
         data_extractors=[AdvancedEmailExtractor(), LinkedinExtractor()],
         depth=depth,
-        max_links_from_page=max_links_from_page,
+        max_links_from_page=min(max_links_from_page, 6),
     )
     return await worker.aget_data()
 
@@ -156,9 +180,10 @@ async def scrape_public_contact_data(
 ) -> ScrapedContactData:
     """Use dmitriiweb/extract-emails as the website email extraction engine.
 
-    Fast path: the upstream async HTTP browser plus its advanced email extractor.
-    Fallback: the upstream Playwright/Chromium browser only when HTTP finds no email.
-    Our wrapper expands contact-page hints and rejects obvious placeholder emails.
+    Fast path: async HTTP extraction from the open-source project.
+    Fallback: Playwright/Chromium only when HTTP finds no same-domain company email.
+    The wrapper keeps only same-company-domain emails, validates LinkedIn profile URLs,
+    filters placeholders, and limits the browser fallback so a site cannot hold a batch.
     """
 
     website_domain = _domain_from_url(website)
@@ -189,25 +214,26 @@ async def scrape_public_contact_data(
     try:
         browser_pages = await asyncio.wait_for(
             _chromium_run(),
-            timeout=min(timeout_seconds, 20),
+            timeout=min(timeout_seconds, 12),
         )
     except Exception:
         return result
 
     browser_result = _collect(browser_pages, website_domain)
-    if not browser_result.emails and not browser_result.linkedin_urls:
-        return result
-
     merged_pages = list(dict.fromkeys(result.pages_checked + browser_result.pages_checked))
     merged_emails = list(dict.fromkeys(result.emails + browser_result.emails))
     merged_linkedin = list(dict.fromkeys(result.linkedin_urls + browser_result.linkedin_urls))
-    merged_emails.sort(
-        key=lambda item: (1 if _same_company_domain(item, website_domain) else 0, item),
-        reverse=True,
+    merged_external = list(
+        dict.fromkeys(
+            (result.rejected_external_emails or [])
+            + (browser_result.rejected_external_emails or [])
+        )
     )
+
     return ScrapedContactData(
         emails=merged_emails,
         linkedin_urls=merged_linkedin,
         pages_checked=merged_pages,
         used_browser_fallback=True,
+        rejected_external_emails=merged_external,
     )

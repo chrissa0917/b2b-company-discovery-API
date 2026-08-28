@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
-from .verified_enricher import enrich_record
+from .person_first_fast import enrich_person_fast
 
 CASES = [
     {"Company": "RobotsInternational.com", "Website URL": "https://www.robotsinternational.com"},
@@ -25,42 +26,59 @@ POSITIONS = [
 ]
 
 
-async def run_one(row: dict) -> dict:
-    try:
-        result = await asyncio.wait_for(
-            enrich_record(
-                row,
-                requested_positions=POSITIONS,
-                use_search=True,
-                deep_verify=False,
-            ),
-            timeout=30,
-        )
-        return result
-    except Exception as exc:
-        return {
-            "Company": row["Company"],
-            "Website URL": row["Website URL"],
-            "Error": str(exc)[:300],
-        }
-
-
 async def main() -> None:
+    semaphore = asyncio.Semaphore(3)
+
+    async def run_one(row: dict) -> dict:
+        async with semaphore:
+            started = time.perf_counter()
+            try:
+                result = await asyncio.wait_for(
+                    enrich_person_fast(row["Company"], row["Website URL"], POSITIONS),
+                    timeout=15,
+                )
+                result["Elapsed Seconds"] = round(time.perf_counter() - started, 2)
+                return result
+            except asyncio.TimeoutError:
+                return {
+                    "Company": row["Company"],
+                    "Website URL": row["Website URL"],
+                    "Status": "timeout",
+                    "Elapsed Seconds": round(time.perf_counter() - started, 2),
+                }
+            except Exception as exc:
+                return {
+                    "Company": row["Company"],
+                    "Website URL": row["Website URL"],
+                    "Status": "error",
+                    "Error": repr(exc)[:300],
+                    "Elapsed Seconds": round(time.perf_counter() - started, 2),
+                }
+
+    tasks = [asyncio.create_task(run_one(row)) for row in CASES]
     results = []
-    for row in CASES:
-        result = await run_one(row)
+    for task in asyncio.as_completed(tasks):
+        result = await task
         results.append(result)
         print("PERSON_FIRST_ROW " + json.dumps(result, ensure_ascii=False), flush=True)
 
     people = [r for r in results if r.get("Contact Name")]
-    candidates = [r for r in results if r.get("Review Candidate Email") or r.get("Verified Email")]
+    candidates = [r for r in results if r.get("Review Candidate Email")]
     junk_titles = [r for r in results if len(str(r.get("Job Title") or "")) > 120]
+    generic_candidates = [
+        r for r in candidates
+        if str(r.get("Review Candidate Email") or "").split("@", 1)[0].lower()
+        in {"info", "hello", "contact", "support", "sales", "marketing", "press", "media"}
+    ]
     summary = {
         "tested": len(results),
         "with_clean_person": len(people),
         "with_person_email_candidate": len(candidates),
+        "generic_primary_candidates": len(generic_candidates),
         "titles_over_120_chars": len(junk_titles),
-        "errors": sum(1 for r in results if r.get("Error")),
+        "timeouts": sum(1 for r in results if r.get("Status") == "timeout"),
+        "errors": sum(1 for r in results if r.get("Status") == "error"),
+        "average_seconds": round(sum(float(r.get("Elapsed Seconds") or 0) for r in results) / len(results), 2),
     }
     print("PERSON_FIRST_SUMMARY " + json.dumps(summary), flush=True)
 

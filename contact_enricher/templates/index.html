@@ -9,20 +9,21 @@
 </head>
 <body><div class="wrap"><div class="card">
 <h1>BuyAndRentRobots Contact Enricher</h1>
-<p class="sub">Upload your company CSV/XLSX. The app crawls public company pages, extracts public emails, identifies marketing/PR/content/partnership contacts, checks mail-domain MX records, and uses public DuckDuckGo result snippets as an optional decision-maker layer.</p>
+<p class="sub">Upload your company CSV/XLSX. The app crawls public company pages, extracts public emails, identifies marketing/PR/content/partnership contacts, checks MX records, deep-verifies candidate mailboxes with an open-source SMTP verifier, and uses public DuckDuckGo result snippets as an optional decision-maker layer.</p>
 <form id="form">
 <div class="grid">
 <div class="full"><label>Company file</label><input type="file" name="file" accept=".csv,.xlsx,.xlsm" required></div>
 <div><label>Parallel companies</label><input type="number" name="concurrency" min="1" max="10" value="4"></div>
 <div><label>Max pages per company</label><input type="number" name="max_pages" min="3" max="25" value="12"></div>
 <div class="full"><label><input style="width:auto" type="checkbox" name="use_search" checked> Use free DuckDuckGo search snippets for decision-maker discovery</label></div>
+<div class="full"><label><input style="width:auto" type="checkbox" name="deep_verify" checked> Deep verify candidate emails with MX + SMTP + catch-all checks</label></div>
 </div><button type="submit">Start enrichment</button>
 </form>
-<div class="note"><b>Suggested columns:</b> Company, Website, BuyAndRentRobots Listing URL. Pattern-generated addresses are marked <b>D-pattern-only-do-not-auto-send</b> and should be reviewed before outreach.</div>
+<div class="note"><b>Suggested columns:</b> Company, Website, BuyAndRentRobots Listing URL. Existing and newly found emails are verified. Pattern-generated addresses are only promoted when SMTP verification confirms them; catch-all patterns stay in review.</div>
 <div class="status" id="status"><div id="statusText">Queued</div><div class="bar"><div class="fill" id="fill"></div></div><div class="links" id="links"></div></div>
 </div></div>
 <script>
 const form=document.getElementById('form'),status=document.getElementById('status'),statusText=document.getElementById('statusText'),fill=document.getElementById('fill'),links=document.getElementById('links');
-form.addEventListener('submit',async e=>{e.preventDefault();status.style.display='block';links.innerHTML='';statusText.textContent='Uploading…';const fd=new FormData(form);if(!form.use_search.checked)fd.set('use_search','false');else fd.set('use_search','true');const r=await fetch('/jobs',{method:'POST',body:fd});const j=await r.json();if(!r.ok){statusText.textContent=j.detail||'Error';return}poll(j.id)});
+form.addEventListener('submit',async e=>{e.preventDefault();status.style.display='block';links.innerHTML='';statusText.textContent='Uploading…';const fd=new FormData(form);if(!form.use_search.checked)fd.set('use_search','false');else fd.set('use_search','true');if(!form.deep_verify.checked)fd.set('deep_verify','false');else fd.set('deep_verify','true');const r=await fetch('/jobs',{method:'POST',body:fd});const j=await r.json();if(!r.ok){statusText.textContent=j.detail||'Error';return}poll(j.id)});
 async function poll(id){const r=await fetch('/jobs/'+id),j=await r.json();const total=j.total||0,done=j.completed||0,pct=total?Math.round(done/total*100):0;fill.style.width=pct+'%';statusText.textContent=`${j.status}: ${done}/${total} (${pct}%)`;if(j.status==='complete'){links.innerHTML=`<a href="/jobs/${id}/download/csv">Download CSV</a><a href="/jobs/${id}/download/xlsx">Download XLSX</a>`;return}if(j.status==='failed'){statusText.textContent='Failed: '+(j.error||'unknown error');return}setTimeout(()=>poll(id),1800)}
 </script></body></html>

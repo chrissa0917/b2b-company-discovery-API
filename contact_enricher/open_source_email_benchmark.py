@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import csv
 import io
 import json
+import os
 import sys
 import time
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
 BATCH_FILE = Path(__file__).with_name("benchmark_batch_106.csv")
 CONCURRENCY = 4
 HARD_TIMEOUT_SECONDS = 15
+OUTPUT_FILE = Path("/tmp/open-source-email-scraper-benchmark-106.csv")
 
 
 def load_companies() -> list[tuple[str, str]]:
@@ -103,7 +105,7 @@ async def one(company: str, website: str, semaphore: asyncio.Semaphore) -> dict:
         }
 
 
-def emit_csv(results: list[dict]) -> None:
+def write_csv(results: list[dict]) -> Path:
     output = io.StringIO(newline="")
     fieldnames = [
         "Company",
@@ -132,8 +134,9 @@ def emit_csv(results: list[dict]) -> None:
             "Rejected External Emails": "; ".join(row.get("rejected_external_emails") or []),
             "Error": row.get("error", ""),
         })
-    encoded = base64.b64encode(output.getvalue().encode("utf-8-sig")).decode("ascii")
-    print("OPEN_SOURCE_EMAIL_BENCHMARK_CSV_BASE64 " + encoded, flush=True)
+    OUTPUT_FILE.write_bytes(output.getvalue().encode("utf-8-sig"))
+    print(f"OPEN_SOURCE_EMAIL_BENCHMARK_CSV_PATH {OUTPUT_FILE}", flush=True)
+    return OUTPUT_FILE
 
 
 async def main() -> None:
@@ -183,8 +186,12 @@ async def main() -> None:
         "hard_process_timeout_seconds": HARD_TIMEOUT_SECONDS,
     }
     print("OPEN_SOURCE_EMAIL_BENCHMARK_SUMMARY " + json.dumps(summary), flush=True)
-    emit_csv(results)
+    write_csv(results)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+    os.chdir("/tmp")
+    port = int(os.environ.get("PORT", "8080"))
+    print(f"BENCHMARK_FILE_SERVER http://0.0.0.0:{port}/open-source-email-scraper-benchmark-106.csv", flush=True)
+    ThreadingHTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler).serve_forever()

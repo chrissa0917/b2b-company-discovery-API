@@ -8,5 +8,6 @@ python-multipart==0.0.20
 openpyxl==3.1.5
 cssselect==1.3.0
 playwright==1.55.0
+requests==2.32.5
+Unidecode==1.4.0
 https://github.com/dmitriiweb/extract-emails/archive/1f2bb4008e0231784fd78b4140780a2992f5c851.zip
-https://github.com/m8sec/CrossLinked/archive/2ae8d7bd5b1e9378f45cbf6ed38a3e79ded3acaf.zip

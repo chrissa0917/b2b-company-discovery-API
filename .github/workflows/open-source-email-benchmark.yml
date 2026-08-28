@@ -22,5 +22,8 @@ jobs:
       - name: Install benchmark dependencies
         run: pip install --no-cache-dir -r requirements-contact-enricher.txt
 
+      - name: Install Chromium for JavaScript fallback
+        run: playwright install chromium --with-deps
+
       - name: Run open-source email benchmark
         run: python -m contact_enricher.open_source_email_benchmark

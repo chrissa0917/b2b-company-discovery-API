@@ -14,7 +14,7 @@ OUTPUT_DIR = Path("/app/output")
 OUTPUT_CSV = OUTPUT_DIR / "person-first-benchmark-106.csv"
 SUMMARY_JSON = OUTPUT_DIR / "person-first-benchmark-106-summary.json"
 CONCURRENCY = 3
-HARD_TIMEOUT_SECONDS = 18
+HARD_TIMEOUT_SECONDS = 48
 GENERIC_LOCALS = {"info", "hello", "contact", "support", "sales", "marketing", "press", "media"}
 
 
@@ -110,11 +110,21 @@ async def run_benchmark() -> tuple[list[dict], dict]:
 
     results.sort(key=lambda item: int(item.get("Benchmark Row") or 0))
     people = [r for r in results if r.get("Contact Name")]
-    candidates = [r for r in results if r.get("Review Candidate Email")]
+    generated = [r for r in results if r.get("Candidate Emails")]
     public_evidence = [r for r in results if r.get("Public Email Evidence")]
+    verified = [r for r in results if r.get("Verified Email")]
+    review = [r for r in results if r.get("Email Status") == "Review"]
+    invalid = [r for r in results if r.get("Email Status") == "Not valid"]
+    not_checked = [r for r in results if r.get("Email Status") == "Not checked"]
+    ready = [r for r in results if str(r.get("Ready to Email") or "").upper() == "YES"]
+    primary_emails = [
+        str(r.get("Verified Email") or r.get("Review Candidate Email") or "")
+        for r in results
+        if r.get("Verified Email") or r.get("Review Candidate Email")
+    ]
     generic_candidates = [
-        r for r in candidates
-        if str(r.get("Review Candidate Email") or "").split("@", 1)[0].lower() in GENERIC_LOCALS
+        email for email in primary_emails
+        if email.split("@", 1)[0].lower() in GENERIC_LOCALS
     ]
     junk_titles = [r for r in results if len(str(r.get("Job Title") or "")) > 120]
     elapsed = sorted(float(r.get("Elapsed Seconds") or 0) for r in results)
@@ -124,8 +134,14 @@ async def run_benchmark() -> tuple[list[dict], dict]:
         "tested": len(results),
         "completed": sum(1 for r in results if r.get("Status") == "complete"),
         "with_clean_person": len(people),
-        "with_person_email_candidate": len(candidates),
+        "with_generated_person_email_candidates": len(generated),
         "with_public_email_evidence": len(public_evidence),
+        "verified_ready": len(ready),
+        "verified_email_count": len(verified),
+        "review_count": len(review),
+        "invalid_count": len(invalid),
+        "not_checked_count": len(not_checked),
+        "verification_addresses_checked": sum(int(r.get("Addresses Checked") or 0) for r in results),
         "generic_primary_candidates": len(generic_candidates),
         "titles_over_120_chars": len(junk_titles),
         "timeouts": sum(1 for r in results if r.get("Status") == "timeout"),
@@ -135,6 +151,7 @@ async def run_benchmark() -> tuple[list[dict], dict]:
         "max_seconds": max(elapsed) if elapsed else 0,
         "concurrency": CONCURRENCY,
         "hard_process_timeout_seconds": HARD_TIMEOUT_SECONDS,
+        "verification_enabled": True,
         "input_file": INPUT_PATH.name,
     }
     print("PERSON_FIRST_106_SUMMARY " + json.dumps(summary), flush=True)
@@ -145,8 +162,9 @@ def write_outputs(results: list[dict], summary: dict) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     preferred_fields = [
         "Benchmark Row", "Company", "Website URL", "Contact Name", "Job Title",
-        "LinkedIn URL", "Contact Source", "Review Candidate Email", "Email Confidence",
-        "Email Pattern", "Approved Email Domains", "Public Email Evidence",
+        "LinkedIn URL", "Contact Source", "Verified Email", "Review Candidate Email",
+        "Email Status", "Verification Verdict", "Verification Attempts", "Addresses Checked",
+        "Email Confidence", "Email Pattern", "Approved Email Domains", "Public Email Evidence",
         "Candidate Emails", "People Found", "Pages Checked", "Ready to Email",
         "Status", "Elapsed Seconds", "Error",
     ]

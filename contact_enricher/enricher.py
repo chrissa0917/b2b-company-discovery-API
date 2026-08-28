@@ -5,7 +5,7 @@ import html
 import re
 from dataclasses import dataclass
 from typing import Iterable
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import dns.resolver
@@ -34,7 +34,8 @@ PAGE_HINTS = [
     "contact", "about", "team", "people", "leadership", "press", "media", "news", "partners",
     "partnership", "marketing", "company"
 ]
-USER_AGENT = "BuyAndRentRobotsContactEnricher/1.0 (+https://buyandrentrobots.com)"
+USER_AGENT = "ChrissaAutomatesContactEnricher/1.0 (+https://chrissaautomates.com/contact-enricher)"
+
 
 @dataclass
 class ContactCandidate:
@@ -44,6 +45,7 @@ class ContactCandidate:
     source_url: str = ""
     source_snippet: str = ""
     score: int = 0
+
 
 @dataclass
 class EmailCandidate:
@@ -110,24 +112,30 @@ def email_rank(email: str, domain: str) -> int:
     return score
 
 
-def role_score(text: str) -> int:
+def role_score(text: str, requested_positions: list[str] | None = None) -> int:
     t = (text or "").lower()
-    return max((score for term, score in ROLE_TERMS if term in t), default=0)
+    requested = 0
+    for idx, position in enumerate(requested_positions or []):
+        term = position.strip().lower()
+        if term and term in t:
+            requested = max(requested, 140 - min(idx, 20))
+    built_in = max((score for term, score in ROLE_TERMS if term in t), default=0)
+    return max(requested, built_in)
 
 
-def infer_name_title(text: str) -> tuple[str, str]:
+def infer_name_title(text: str, requested_positions: list[str] | None = None) -> tuple[str, str]:
     cleaned = re.sub(r"\s+", " ", html.unescape(text or "")).strip(" -|•")
-    if not role_score(cleaned):
+    if not role_score(cleaned, requested_positions):
         return "", ""
-    parts = re.split(r"\s+[|–—-]\s+|\s+at\s+", cleaned, maxsplit=2, flags=re.I)
+    parts = re.split(r"\s+[|–—-]\s+|\s+at\s+", cleaned, maxsplit=4, flags=re.I)
     possible_name = ""
     possible_title = cleaned
     for part in parts:
         words = part.strip().split()
         if 2 <= len(words) <= 5 and all(re.match(r"^[A-Za-zÀ-ÖØ-öø-ÿ'`.]+$", w) for w in words):
-            if role_score(part) == 0:
+            if role_score(part, requested_positions) == 0 and not possible_name:
                 possible_name = part.strip()
-        if role_score(part) > 0:
+        if role_score(part, requested_positions) > 0:
             possible_title = part.strip()
     return possible_name, possible_title
 
@@ -136,12 +144,14 @@ async def mx_valid(domain: str) -> bool:
     if not domain:
         return False
     loop = asyncio.get_running_loop()
+
     def _check() -> bool:
         try:
             answers = dns.resolver.resolve(domain, "MX", lifetime=5)
             return bool(list(answers))
         except Exception:
             return False
+
     return await loop.run_in_executor(None, _check)
 
 
@@ -230,13 +240,13 @@ async def crawl_company(website: str, max_pages: int = 12) -> tuple[list[EmailCa
         item.mx_valid = mx_cache[host]
         same_domain = host == domain or host.endswith("." + domain)
         if same_domain and item.mx_valid:
-            item.confidence = "A-public-domain-mx"
+            item.confidence = "public-company-email"
         elif same_domain:
-            item.confidence = "A-public-domain"
+            item.confidence = "public-company-email-unconfirmed"
         elif item.mx_valid:
-            item.confidence = "B-public-external"
+            item.confidence = "public-email"
         else:
-            item.confidence = "C-public-unverified"
+            item.confidence = "public-email-unconfirmed"
 
     contacts = dedupe_contacts(contacts)
     ranked_emails = sorted(emails.values(), key=lambda e: email_rank(e.email, domain), reverse=True)
@@ -247,7 +257,7 @@ def dedupe_contacts(items: Iterable[ContactCandidate]) -> list[ContactCandidate]
     out: list[ContactCandidate] = []
     seen = set()
     for item in sorted(items, key=lambda x: x.score, reverse=True):
-        key = (item.name.lower(), item.title.lower(), item.source_snippet[:100].lower())
+        key = (item.name.lower(), item.title.lower(), item.linkedin_url.lower(), item.source_snippet[:100].lower())
         if key in seen:
             continue
         seen.add(key)
@@ -255,21 +265,44 @@ def dedupe_contacts(items: Iterable[ContactCandidate]) -> list[ContactCandidate]
     return out[:10]
 
 
-async def duckduckgo_decision_makers(company: str, website: str, max_results: int = 8) -> list[ContactCandidate]:
-    """Use DuckDuckGo HTML results only. Does not crawl LinkedIn pages."""
+def clean_search_result_url(href: str) -> str:
+    if not href:
+        return ""
+    if href.startswith("//"):
+        href = "https:" + href
+    parsed = urlparse(href)
+    if "duckduckgo.com" in parsed.netloc:
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        if target:
+            return unquote(target)
+    return href
+
+
+async def duckduckgo_decision_makers(
+    company: str,
+    website: str,
+    requested_positions: list[str] | None = None,
+    max_results: int = 6,
+) -> list[ContactCandidate]:
+    """Search public result pages only. LinkedIn result URLs may be saved but are never opened."""
     domain = domain_from_url(website)
-    queries = [
-        f'"{company}" marketing director LinkedIn',
-        f'"{company}" communications PR partnerships LinkedIn',
-        f'"{company}" content marketing manager',
-    ]
+    positions = [p.strip() for p in (requested_positions or []) if p.strip()][:6]
+    if not positions:
+        positions = ["Marketing Director", "Head of Marketing", "Partnerships Manager", "Communications Director"]
+
+    queries: list[str] = []
+    for position in positions:
+        queries.append(f'"{company}" "{position}" email LinkedIn')
+    if domain and positions:
+        queries.append(f'"{domain}" "{positions[0]}" email')
+
     headers = {"User-Agent": USER_AGENT}
     found: list[ContactCandidate] = []
     async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
-        for query in queries:
-            url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
+        for query in queries[:7]:
+            search_url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
             try:
-                r = await client.get(url, timeout=15)
+                r = await client.get(search_url, timeout=15)
                 soup = BeautifulSoup(r.text, "html.parser")
                 for result in soup.select(".result")[:max_results]:
                     a = result.select_one(".result__a")
@@ -278,19 +311,20 @@ async def duckduckgo_decision_makers(company: str, website: str, max_results: in
                         continue
                     title_text = a.get_text(" ", strip=True)
                     snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
-                    score = role_score(title_text + " " + snippet)
+                    combined = title_text + " " + snippet
+                    score = role_score(combined, positions)
                     if score <= 0:
                         continue
-                    href = a.get("href", "")
-                    linkedin = href if "linkedin.com" in href else ""
-                    name, title = infer_name_title(title_text + " | " + snippet)
+                    target_url = clean_search_result_url(a.get("href", ""))
+                    linkedin = target_url if "linkedin.com/in/" in target_url.lower() else ""
+                    name, title = infer_name_title(title_text + " | " + snippet, positions)
                     found.append(ContactCandidate(
                         name=name,
                         title=title,
                         linkedin_url=linkedin,
-                        source_url=url,
+                        source_url=target_url or search_url,
                         source_snippet=(title_text + " — " + snippet)[:350],
-                        score=score + (5 if domain and domain in snippet.lower() else 0),
+                        score=score + (8 if linkedin else 0) + (5 if domain and domain in snippet.lower() else 0),
                     ))
                 await asyncio.sleep(0.8)
             except Exception:
@@ -324,65 +358,5 @@ def choose_primary_email(public_emails: list[EmailCandidate], contact: ContactCa
     if contact and contact.name:
         patterns = generate_email_patterns(contact.name, domain)
         if patterns:
-            return patterns[0], "D-pattern-only-do-not-auto-send", contact.source_url
+            return patterns[0], "pattern-only-review", contact.source_url
     return "", "", ""
-
-
-async def enrich_record(record: dict, use_search: bool = True, max_pages: int = 12) -> dict:
-    company = str(record.get("Company") or record.get("Company Name") or record.get("company") or record.get("name") or "").strip()
-    website = str(record.get("Website") or record.get("website") or record.get("Website URL") or record.get("website_url") or "").strip()
-    listing = str(record.get("BuyAndRentRobots Listing URL") or record.get("Listing URL") or record.get("listing_url") or "").strip()
-    domain = domain_from_url(website)
-
-    public_emails, site_contacts, visited = await crawl_company(website, max_pages=max_pages)
-    search_contacts = await duckduckgo_decision_makers(company, website) if use_search and company else []
-    contacts = dedupe_contacts(site_contacts + search_contacts)
-    best_contact = contacts[0] if contacts else None
-    primary_email, confidence, email_source = choose_primary_email(public_emails, best_contact, domain)
-
-    general = next((e.email for e in public_emails if e.email.split("@")[0] in {"info", "contact", "hello", "sales"}), "")
-    marketing = next((e.email for e in public_emails if e.email.split("@")[0] in {"marketing", "press", "media", "pr", "communications", "partnerships"}), "")
-
-    result = dict(record)
-    result.update({
-        "Company": company,
-        "Website": website,
-        "BuyAndRentRobots Listing URL": listing,
-        "Contact Name": best_contact.name if best_contact else "",
-        "Job Title": best_contact.title if best_contact else "",
-        "LinkedIn URL": best_contact.linkedin_url if best_contact else "",
-        "Best Email": primary_email,
-        "Email Confidence": confidence,
-        "Email Source URL": email_source,
-        "Marketing/PR Email": marketing,
-        "General Email": general,
-        "All Public Emails": "; ".join(e.email for e in public_emails[:12]),
-        "Contact Source URL": best_contact.source_url if best_contact else "",
-        "Contact Evidence": best_contact.source_snippet if best_contact else "",
-        "Pages Crawled": len(visited),
-        "Ready to Email": "YES" if confidence.startswith(("A-", "B-")) else "REVIEW",
-    })
-    return result
-
-
-async def enrich_rows(rows: list[dict], concurrency: int = 4, use_search: bool = True, max_pages: int = 12, progress_cb=None) -> list[dict]:
-    sem = asyncio.Semaphore(max(1, min(concurrency, 10)))
-    total = len(rows)
-    completed = 0
-    lock = asyncio.Lock()
-
-    async def one(row: dict):
-        nonlocal completed
-        async with sem:
-            try:
-                result = await enrich_record(row, use_search=use_search, max_pages=max_pages)
-            except Exception as exc:
-                result = dict(row)
-                result["Error"] = str(exc)[:250]
-            async with lock:
-                completed += 1
-                if progress_cb:
-                    progress_cb(completed, total)
-            return result
-
-    return await asyncio.gather(*(one(r) for r in rows))

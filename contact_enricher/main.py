@@ -31,7 +31,7 @@ DEFAULT_POSITIONS = [
     "CEO",
 ]
 
-app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.0.0")
+app = FastAPI(title="Chrissa Automates Contact Enricher", version="2.1.0")
 
 
 def require_api_key(request: Request) -> None:
@@ -47,7 +47,9 @@ def require_job_owner(request: Request, job: dict) -> None:
         raise HTTPException(403, "This job belongs to a different account.")
 
 
-def parse_positions(raw: str) -> list[str]:
+def parse_positions(raw: str, mode: str) -> list[str]:
+    if mode == "basic":
+        return []
     raw = (raw or "").strip()
     if not raw:
         return DEFAULT_POSITIONS[:5]
@@ -125,6 +127,7 @@ async def run_job(
     concurrency: int,
     requested_positions: list[str],
     max_pages: int,
+    mode: str,
 ):
     try:
         rows = read_input(input_path)
@@ -137,7 +140,7 @@ async def run_job(
             rows,
             requested_positions=requested_positions,
             concurrency=concurrency,
-            use_search=True,
+            use_search=mode == "targeted",
             max_pages=max_pages,
             deep_verify=True,
             progress_cb=progress,
@@ -164,11 +167,15 @@ async def stage_job(
     file: UploadFile = File(...),
     owner_id: str = Form(...),
     positions: str = Form(""),
+    mode: str = Form("targeted"),
     concurrency: int = Form(4),
     max_pages: int = Form(12),
 ):
     require_api_key(request)
     owner_id = owner_id.strip()
+    mode = mode.strip().lower()
+    if mode not in {"basic", "targeted"}:
+        raise HTTPException(400, "Invalid lookup mode.")
     if not owner_id:
         raise HTTPException(400, "Missing account owner.")
     suffix = Path(file.filename or "input.csv").suffix.lower()
@@ -185,7 +192,7 @@ async def stage_job(
     if len(rows) > 2000:
         raise HTTPException(400, "Please upload 2,000 companies or fewer per job.")
 
-    requested_positions = parse_positions(positions)
+    requested_positions = parse_positions(positions, mode)
     JOBS[job_id] = {
         "id": job_id,
         "owner_id": owner_id,
@@ -194,6 +201,7 @@ async def stage_job(
         "total": len(rows),
         "input_path": str(input_path),
         "positions": requested_positions,
+        "mode": mode,
         "concurrency": min(max(concurrency, 1), 8),
         "max_pages": min(max(max_pages, 3), 20),
     }
@@ -202,6 +210,7 @@ async def stage_job(
         "status": "staged",
         "total": len(rows),
         "positions": requested_positions,
+        "mode": mode,
     }
 
 
@@ -221,11 +230,12 @@ async def start_job(request: Request, job_id: str):
             job_id,
             input_path,
             int(job.get("concurrency", 4)),
-            list(job.get("positions") or DEFAULT_POSITIONS[:5]),
+            list(job.get("positions") or []),
             int(job.get("max_pages", 12)),
+            str(job.get("mode") or "targeted"),
         )
     )
-    return {"id": job_id, "status": "queued", "total": job.get("total", 0)}
+    return {"id": job_id, "status": "queued", "total": job.get("total", 0), "mode": job.get("mode")}
 
 
 @app.get("/jobs/{job_id}")
@@ -240,6 +250,7 @@ def job_status(request: Request, job_id: str):
         "status": job.get("status"),
         "completed": job.get("completed", 0),
         "total": job.get("total", 0),
+        "mode": job.get("mode", "targeted"),
         "error": job.get("error", ""),
     }
 

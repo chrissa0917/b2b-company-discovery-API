@@ -1,0 +1,56 @@
+name: Vendor pinned AfterShip email verifier
+
+on:
+  push:
+    branches:
+      - buyandrentrobots-contact-enricher
+    paths:
+      - .github/workflows/vendor-aftership-email-verifier.yml
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: buyandrentrobots-contact-enricher
+          fetch-depth: 0
+
+      - name: Copy pinned upstream source into this repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          PINNED_COMMIT="d8462fdd79d9aca5452bd220f9cd5224976fea49"
+          rm -rf /tmp/aftership-email-verifier third_party/aftership-email-verifier
+          git clone https://github.com/AfterShip/email-verifier.git /tmp/aftership-email-verifier
+          git -C /tmp/aftership-email-verifier checkout "$PINNED_COMMIT"
+          rm -rf /tmp/aftership-email-verifier/.git
+          mkdir -p third_party
+          cp -a /tmp/aftership-email-verifier third_party/aftership-email-verifier
+          cat > third_party/aftership-email-verifier/SOURCE_SNAPSHOT.md <<EOF
+          # Source snapshot
+
+          Original project: AfterShip/email-verifier
+          Original commit: $PINNED_COMMIT
+          License: MIT
+
+          This directory is a preserved source snapshot used by Chrissa Automates so production builds do not depend on the upstream repository remaining available.
+          EOF
+
+      - name: Commit snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add third_party/aftership-email-verifier
+          if git diff --cached --quiet; then
+            echo "Snapshot already matches pinned source."
+            exit 0
+          fi
+          git commit -m "Vendor pinned AfterShip email verifier source"
+          git push origin HEAD:buyandrentrobots-contact-enricher

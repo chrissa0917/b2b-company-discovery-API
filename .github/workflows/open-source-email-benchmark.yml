@@ -1,0 +1,26 @@
+name: Open Source Email Scraper Benchmark
+
+on:
+  push:
+    branches:
+      - agent/open-source-email-scraper
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install benchmark dependencies
+        run: pip install --no-cache-dir -r requirements-contact-enricher.txt
+
+      - name: Run open-source email benchmark
+        run: python -m contact_enricher.open_source_email_benchmark

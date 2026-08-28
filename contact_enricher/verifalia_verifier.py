@@ -57,6 +57,32 @@ def _map_entry(entry: dict) -> dict:
     }
 
 
+async def _submit(client: httpx.AsyncClient, clean: list[str]) -> httpx.Response:
+    return await client.post(
+        f"{VERIFALIA_API}/email-validations",
+        params={"waitTime": "30000"},
+        json={"entries": [{"inputData": email} for email in clean], "quality": "Standard"},
+    )
+
+
+async def _bearer_token(timeout: httpx.Timeout) -> tuple[str, str]:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as auth_client:
+            response = await auth_client.post(
+                f"{VERIFALIA_API}/auth/tokens",
+                json={"username": VERIFALIA_USERNAME, "password": VERIFALIA_PASSWORD},
+            )
+            if response.status_code != 200:
+                return "", f"token HTTP {response.status_code}: {response.text[:400]}"
+            payload = response.json()
+            token = str(payload.get("accessToken") or "").strip() if isinstance(payload, dict) else ""
+            if not token:
+                return "", "token response did not contain accessToken"
+            return token, ""
+    except Exception as exc:
+        return "", str(exc)[:300]
+
+
 async def verify_emails_verifalia(emails: list[str]) -> dict[str, dict]:
     clean = list(dict.fromkeys((email or "").strip().lower() for email in emails if (email or "").strip()))
     if not clean:
@@ -64,24 +90,83 @@ async def verify_emails_verifalia(emails: list[str]) -> dict[str, dict]:
     if not VERIFALIA_USERNAME or not VERIFALIA_PASSWORD:
         return {email: {"email": email, "verdict": "not_configured", "provider": "verifalia"} for email in clean}
 
-    auth = httpx.BasicAuth(VERIFALIA_USERNAME, VERIFALIA_PASSWORD)
     timeout = httpx.Timeout(40.0, connect=8.0)
     try:
-        async with httpx.AsyncClient(auth=auth, timeout=timeout, follow_redirects=True) as client:
-            response = await client.post(
-                f"{VERIFALIA_API}/email-validations",
-                params={"waitTime": "30000"},
-                json={"entries": [{"inputData": email} for email in clean], "quality": "Standard"},
-            )
-            if response.status_code not in {200, 202}:
-                detail = response.text[:500]
-                return {email: {"email": email, "verdict": "unknown", "provider": "verifalia", "error": f"HTTP {response.status_code}: {detail}"} for email in clean}
-            payload = response.json()
-            entries = _entries_from_snapshot(payload)
-            job_id = _overview_id(payload)
+        # Try HTTP Basic first because it is the fastest for a one-off request.
+        async with httpx.AsyncClient(
+            auth=httpx.BasicAuth(VERIFALIA_USERNAME, VERIFALIA_PASSWORD),
+            timeout=timeout,
+            follow_redirects=True,
+        ) as client:
+            response = await _submit(client, clean)
 
-            # Free-plan jobs can be best-effort and may still be queued after the
-            # initial 30-second wait. Poll a bounded number of times.
+        auth_mode = "basic"
+        if response.status_code == 401:
+            # Verifalia may have Basic authentication disabled for a user. In
+            # that case request a JWT bearer token with the same credentials.
+            token, token_error = await _bearer_token(timeout)
+            if not token:
+                detail = token_error or response.text[:400]
+                return {
+                    email: {
+                        "email": email,
+                        "verdict": "unknown",
+                        "provider": "verifalia",
+                        "auth_mode": "bearer_failed",
+                        "error": detail,
+                    }
+                    for email in clean
+                }
+            auth_mode = "bearer"
+            async with httpx.AsyncClient(
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=timeout,
+                follow_redirects=True,
+            ) as client:
+                response = await _submit(client, clean)
+
+        if response.status_code not in {200, 202}:
+            detail = response.text[:500]
+            return {
+                email: {
+                    "email": email,
+                    "verdict": "unknown",
+                    "provider": "verifalia",
+                    "auth_mode": auth_mode,
+                    "error": f"HTTP {response.status_code}: {detail}",
+                }
+                for email in clean
+            }
+
+        payload = response.json()
+        entries = _entries_from_snapshot(payload)
+        job_id = _overview_id(payload)
+
+        # Poll with the same successful authentication mode.
+        if auth_mode == "bearer":
+            token, token_error = await _bearer_token(timeout)
+            if not token:
+                return {
+                    email: {
+                        "email": email,
+                        "verdict": "unknown",
+                        "provider": "verifalia",
+                        "auth_mode": auth_mode,
+                        "error": token_error or "could not refresh bearer token",
+                    }
+                    for email in clean
+                }
+            poll_client = httpx.AsyncClient(
+                headers={"Authorization": f"Bearer {token}"}, timeout=timeout, follow_redirects=True
+            )
+        else:
+            poll_client = httpx.AsyncClient(
+                auth=httpx.BasicAuth(VERIFALIA_USERNAME, VERIFALIA_PASSWORD),
+                timeout=timeout,
+                follow_redirects=True,
+            )
+
+        async with poll_client as client:
             for _ in range(3):
                 if len(entries) >= len(clean):
                     break
@@ -97,9 +182,31 @@ async def verify_emails_verifalia(emails: list[str]) -> dict[str, dict]:
                 payload = poll.json()
                 entries = _entries_from_snapshot(payload)
 
-            results = {_map_entry(entry)["email"]: _map_entry(entry) for entry in entries if _map_entry(entry)["email"]}
-            for email in clean:
-                results.setdefault(email, {"email": email, "verdict": "unknown", "provider": "verifalia", "error": "verification job did not return a completed entry in time"})
-            return results
+        results: dict[str, dict] = {}
+        for entry in entries:
+            mapped = _map_entry(entry)
+            if mapped["email"]:
+                mapped["auth_mode"] = auth_mode
+                results[mapped["email"]] = mapped
+        for email in clean:
+            results.setdefault(
+                email,
+                {
+                    "email": email,
+                    "verdict": "unknown",
+                    "provider": "verifalia",
+                    "auth_mode": auth_mode,
+                    "error": "verification job did not return a completed entry in time",
+                },
+            )
+        return results
     except Exception as exc:
-        return {email: {"email": email, "verdict": "unknown", "provider": "verifalia", "error": str(exc)[:300]} for email in clean}
+        return {
+            email: {
+                "email": email,
+                "verdict": "unknown",
+                "provider": "verifalia",
+                "error": str(exc)[:300],
+            }
+            for email in clean
+        }

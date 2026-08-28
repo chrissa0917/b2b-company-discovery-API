@@ -48,16 +48,16 @@ def plain_email_status(data: dict) -> tuple[str, str]:
     result = data.get("result") if isinstance(data.get("result"), dict) else {}
     smtp = result.get("smtp") if isinstance(result.get("smtp"), dict) else {}
     if verdict == "valid":
-        return "Verified", "The mailbox accepted a delivery check."
+        return "Verified", "The address passed the delivery check."
     if verdict == "catch_all":
-        return "Review", "The company accepts many addresses, so this specific mailbox could not be confirmed."
+        return "Review", "The company accepts many addresses, so this exact address could not be confirmed."
     if verdict == "invalid":
         return "Not valid", "The address was rejected or could not receive mail."
     if verdict in {"not_run", "not_configured"}:
         return "Not checked", "The address was not fully checked."
     if smtp and smtp.get("catch_all"):
-        return "Review", "The company accepts many addresses, so this specific mailbox could not be confirmed."
-    return "Review", "The mailbox could not be confirmed with enough confidence."
+        return "Review", "The company accepts many addresses, so this exact address could not be confirmed."
+    return "Review", "The address could not be confirmed with enough confidence."
 
 
 async def choose_and_verify_email(
@@ -116,13 +116,17 @@ async def enrich_record(
     website = str(record.get("Website URL") or "").strip()
     domain = domain_from_url(website)
     positions = [p.strip() for p in (requested_positions or []) if p.strip()]
+    basic_company_mode = not use_search and not positions
 
     public_emails, site_contacts, visited = await crawl_company(website, max_pages=max_pages)
     search_contacts = (
         await duckduckgo_decision_makers(company, website, positions)
-        if use_search and company else []
+        if use_search and company and positions else []
     )
-    contacts = dedupe_contacts(search_contacts + site_contacts)
+
+    # The free company-email mode deliberately avoids person-level enrichment.
+    # Named people, role matching and professional profile links are reserved for targeted searches.
+    contacts = [] if basic_company_mode else dedupe_contacts(search_contacts + site_contacts)
     best_contact = contacts[0] if contacts else None
 
     chosen_email, confidence, email_source, verification, attempts = await choose_and_verify_email(
@@ -133,7 +137,20 @@ async def enrich_record(
     verified_email = chosen_email if verdict == "valid" else ""
     review_email = chosen_email if chosen_email and verdict != "valid" else ""
 
-    result = {
+    if basic_company_mode:
+        return {
+            "Company": company,
+            "Website URL": website,
+            "Company Email": verified_email,
+            "Email Status": status,
+            "Ready to Email": "YES" if verdict == "valid" else "NO",
+            "Review Email": review_email,
+            "Email Source": email_source,
+            "Other Public Company Emails": "; ".join(item.email for item in public_emails[:10] if item.email != chosen_email),
+            "Verification Note": note,
+        }
+
+    return {
         "Company": company,
         "Website URL": website,
         "Requested Positions": "; ".join(positions),
@@ -153,7 +170,6 @@ async def enrich_record(
         "Pages Checked": len(visited),
         "Addresses Checked": len(attempts),
     }
-    return result
 
 
 async def enrich_rows(

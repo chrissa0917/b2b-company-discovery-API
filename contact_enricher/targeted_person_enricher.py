@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+
 from . import verified_enricher as _base
-from .enricher import crawl_company, dedupe_contacts, domain_from_url
-from .person_search import find_people_ddgs
+from .enricher import crawl_company, dedupe_contacts, domain_from_url, role_score
+from .live_person_discovery import find_people_live
+from .live_sources import augment_email_evidence, select_generic_company_email
 from .reoon_integration import choose_and_verify_person_email
 
 _ORIGINAL_ENRICH_RECORD = _base.enrich_record
@@ -11,11 +14,26 @@ _ORIGINAL_ENRICH_RECORD = _base.enrich_record
 def contact_rating(contact) -> str:
     if not contact or not getattr(contact, "name", ""):
         return "0/100"
-    raw = max(0, min(int(getattr(contact, "score", 0) or 0), 160))
-    score = round(55 + (raw / 160) * 44)
+    raw = max(0, min(int(getattr(contact, "score", 0) or 0), 240))
+    score = round(55 + (raw / 240) * 44)
     if getattr(contact, "linkedin_url", ""):
-        score = max(score, 90)
+        score = max(score, 88)
+    if getattr(contact, "source_url", "") and not getattr(contact, "linkedin_url", ""):
+        score = max(score, 72)
     return f"{min(99, max(55, score))}/100"
+
+
+def _official_site_people(site_contacts, positions):
+    out = []
+    for item in site_contacts:
+        if not item.name or len(item.name.split()) < 2:
+            continue
+        evidence = f"{item.title} {item.source_snippet}"
+        if role_score(evidence, positions) <= 0:
+            continue
+        item.score = max(int(item.score or 0), 205)
+        out.append(item)
+    return out
 
 
 async def enrich_record(
@@ -39,99 +57,127 @@ async def enrich_record(
     website = str(record.get("Website URL") or "").strip()
     domain = domain_from_url(website)
 
-    # Person discovery and company crawling run together. The crawler supplies
-    # domain-level email evidence used to learn the company's actual convention.
-    people, evidence = await __import__("asyncio").gather(
-        find_people_ddgs(company, website, positions),
-        crawl_company(website, max_pages=min(max_pages, 8)),
+    search_people, evidence = await asyncio.gather(
+        find_people_live(company, website, positions, site_contacts=[]),
+        crawl_company(website, max_pages=min(max_pages, 10)),
     )
     public_emails, site_contacts, visited = evidence
-    contacts = dedupe_contacts(people)
+
+    contacts = dedupe_contacts([*_official_site_people(site_contacts, positions), *search_people])
     best_contact = contacts[0] if contacts else None
 
-    if not best_contact:
-        return {
-            "Company": company,
-            "Website URL": website,
-            "Requested Positions": "; ".join(positions),
-            "Contact Name": "",
-            "Job Title": "",
-            "Contact Rating": "0/100",
-            "Verified Email": "",
-            "Email Status": "No strong contact found",
-            "Ready to Email": "NO",
-            "Review Candidate Email": "",
-            "LinkedIn URL": "",
-            "Email Source": "",
-            "Contact Source": "",
-            "Why This Contact": "",
-            "Verification Note": "We did not find a strong enough person/company match to infer an email.",
-            "Email Confidence": "",
-            "Email Verification Score": "",
-            "Email Pattern": "",
-            "Mail Domain Used": "",
-            "Pattern Evidence": "",
-            "Other Public Emails": "; ".join(item.email for item in public_emails[:10]),
-            "Pages Checked": len(visited),
-            "Addresses Checked": 0,
-        }
-
-    chosen_email, confidence, email_source, verification, attempts, strategy = await choose_and_verify_person_email(
+    all_public_emails, pattern_contacts = await augment_email_evidence(
+        company,
+        website,
+        best_contact,
         public_emails,
         site_contacts,
-        best_contact,
-        domain,
-        deep_verify,
-        max_verifications=2,
     )
+
+    generic_email, generic_source, generic_note = select_generic_company_email(
+        all_public_emails,
+        website,
+        requested_positions=positions,
+    )
+
+    chosen_email = ""
+    confidence = ""
+    email_source = ""
+    verification = {"verdict": "not_run"}
+    attempts: list[str] = []
+    strategy = {"mail_domains": [], "learned_patterns": [], "blind_fallback_disabled": True}
+
+    if best_contact:
+        chosen_email, confidence, email_source, verification, attempts, strategy = await choose_and_verify_person_email(
+            all_public_emails,
+            pattern_contacts,
+            best_contact,
+            domain,
+            deep_verify,
+            max_verifications=2,
+        )
+
     verdict = str(verification.get("verdict") or "not_run").lower()
     status, note = _base.plain_email_status(verification)
     verified_email = chosen_email if verdict == "valid" else ""
     review_email = chosen_email if chosen_email and verdict != "valid" else ""
     verification_score = verification.get("overall_score")
 
-    if not chosen_email and attempts:
-        status = "Not valid"
-        note = "The person was found, but the evidence-ranked email candidates were rejected."
-    elif not chosen_email:
-        status = "No email found"
-        note = "The person was found, but no public or evidence-backed email could be confirmed."
+    if verified_email:
+        usable_email = verified_email
+        contact_type = "Verified named person"
+        verification_level = "Reoon verified mailbox"
+        ready = "YES"
+    elif generic_email:
+        usable_email = generic_email
+        contact_type = "Company fallback"
+        verification_level = "Public company inbox with MX"
+        ready = "YES"
+        status = "Company fallback"
+        note = generic_note or "No named-person mailbox was safely verified; use the public company inbox."
+    elif review_email:
+        usable_email = ""
+        contact_type = "Person candidate for review"
+        verification_level = "Not safe enough for cold outreach"
+        ready = "NO"
+    else:
+        usable_email = ""
+        contact_type = "No usable contact"
+        verification_level = "No usable address found"
+        ready = "NO"
+        if best_contact and attempts:
+            status = "Not valid"
+            note = "The person was found, but the evidence-backed email candidates were rejected."
+        elif best_contact:
+            status = "No email found"
+            note = "The person was found, but no evidence-backed person email or clean company inbox was found."
+        else:
+            status = "No strong contact found"
+            note = "No strong current person match or clean public company inbox was found."
 
     learned = strategy.get("learned_patterns") or []
     selected_reason = str(strategy.get("selected_reason") or "")
     pattern_used = ""
     if "learned-pattern:" in selected_reason:
         pattern_used = selected_reason.split("learned-pattern:", 1)[1].split(";", 1)[0]
-    elif "fallback-pattern:" in selected_reason:
-        pattern_used = selected_reason.split("fallback-pattern:", 1)[1].split(";", 1)[0]
 
     pattern_evidence = "; ".join(
         f"{item.get('domain')}:{item.get('pattern')} ({item.get('examples')} example(s), score {item.get('score')})"
         for item in learned[:3]
     )
 
+    excluded = {value for value in (chosen_email, generic_email) if value}
+    other_public = "; ".join(
+        item.email for item in all_public_emails[:12] if item.email not in excluded
+    )
+
     return {
         "Company": company,
         "Website URL": website,
         "Requested Positions": "; ".join(positions),
-        "Contact Name": best_contact.name,
-        "Job Title": best_contact.title,
+        "Contact Name": best_contact.name if best_contact else "",
+        "Job Title": best_contact.title if best_contact else "",
         "Contact Rating": contact_rating(best_contact),
         "Verified Email": verified_email,
+        "Generic Company Email": generic_email,
+        "Usable Contact Email": usable_email,
+        "Contact Type": contact_type,
+        "Verification Level": verification_level,
         "Email Status": status,
-        "Ready to Email": "YES" if verdict == "valid" else "NO",
+        "Ready to Email": ready,
         "Review Candidate Email": review_email,
-        "LinkedIn URL": best_contact.linkedin_url,
+        "LinkedIn URL": best_contact.linkedin_url if best_contact else "",
         "Email Source": email_source,
-        "Contact Source": best_contact.source_url,
-        "Why This Contact": best_contact.source_snippet,
+        "Generic Email Source": generic_source,
+        "Contact Source": best_contact.source_url if best_contact else "",
+        "Why This Contact": best_contact.source_snippet if best_contact else "",
         "Verification Note": note,
         "Email Confidence": confidence,
         "Email Verification Score": verification_score if verification_score is not None else "",
         "Email Pattern": pattern_used,
         "Mail Domain Used": "; ".join(strategy.get("mail_domains") or []),
         "Pattern Evidence": pattern_evidence,
-        "Other Public Emails": "; ".join(item.email for item in public_emails[:10] if item.email != chosen_email),
+        "Other Public Emails": other_public,
         "Pages Checked": len(visited),
         "Addresses Checked": len(attempts),
     }

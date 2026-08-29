@@ -10,11 +10,32 @@ from .enricher import ContactCandidate, dedupe_contacts, domain_from_url, role_s
 from .live_sources import _search, company_match_score
 from .person_search import _extract_name_title, _role_terms
 
+NON_PERSON_NAME_WORDS = {
+    "news", "funding", "team", "company", "official", "careers", "jobs", "press",
+    "media", "marketing", "sales", "investors", "investment", "resources", "solutions",
+    "services", "robotics", "technology", "technologies", "global", "group", "directory",
+    "profile", "department", "office", "support", "contact", "research", "report",
+}
+
 
 def _norm_name(value: str) -> str:
     value = unicodedata.normalize("NFKD", value or "")
     value = "".join(ch for ch in value if not unicodedata.combining(ch))
     return re.sub(r"[^a-z]", "", value.lower())
+
+
+def looks_human_name(value: str) -> bool:
+    raw = (value or "").strip()
+    if not raw or "'s " in raw.lower() or len(raw) > 70:
+        return False
+    words = [re.sub(r"[^a-z]", "", word.lower()) for word in raw.split()]
+    if not 2 <= len(words) <= 5:
+        return False
+    if any(not word or len(word) < 2 for word in words):
+        return False
+    if any(word in NON_PERSON_NAME_WORDS for word in words):
+        return False
+    return True
 
 
 def _source_host(url: str) -> str:
@@ -97,7 +118,7 @@ async def find_people_live(
     candidates: list[ContactCandidate] = []
 
     for item in site_contacts or []:
-        if not item.name or len(item.name.split()) < 2:
+        if not item.name or len(item.name.split()) < 2 or not looks_human_name(item.name):
             continue
         role_evidence = item.title or item.source_snippet
         if not matches_requested_role(role_evidence, requested):
@@ -119,7 +140,7 @@ async def find_people_live(
             if company_score < 40:
                 continue
             name, job = _extract_name_title(title, body, requested)
-            if not name or not job or not matches_requested_role(job, requested):
+            if not name or not looks_human_name(name) or not job or not matches_requested_role(job, requested):
                 continue
             linkedin = href if "linkedin.com/in/" in href.lower() else ""
             candidate = ContactCandidate(

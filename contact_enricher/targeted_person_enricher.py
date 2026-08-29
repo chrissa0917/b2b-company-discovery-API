@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from . import verified_enricher as _base
 from .company_identity import company_website_alignment
@@ -35,6 +36,33 @@ def _official_site_people(site_contacts, positions):
         item.score = max(int(item.score or 0), 205)
         out.append(item)
     return out
+
+
+def _generic_email_belongs_to_company(email: str, company: str, website: str) -> bool:
+    """Reject partner/vendor inboxes that merely appear on an official company page."""
+    if "@" not in (email or ""):
+        return False
+    host = email.rsplit("@", 1)[1].lower().strip(".")
+    website_domain = domain_from_url(website)
+    if website_domain and (host == website_domain or host.endswith("." + website_domain)):
+        return True
+
+    skip = {
+        "company", "group", "global", "international", "technology", "technologies",
+        "robot", "robots", "robotics", "solutions", "systems", "services", "team",
+        "official", "inc", "corp", "corporation", "limited", "ltd", "llc",
+    }
+    tokens = [
+        token for token in re.findall(r"[a-z0-9]+", (company or "").lower())
+        if len(token) >= 4 and token not in skip
+    ]
+    for label in (website_domain or "").split("."):
+        label = re.sub(r"[^a-z0-9]", "", label.lower())
+        if len(label) >= 4 and label not in {"www", "com", "net", "org", "global"}:
+            tokens.append(label)
+
+    compact_host = re.sub(r"[^a-z0-9]", "", host)
+    return any(re.sub(r"[^a-z0-9]", "", token) in compact_host for token in dict.fromkeys(tokens))
 
 
 def _identity_mismatch_result(company: str, website: str, positions: list[str], score: int, note: str) -> dict:
@@ -119,6 +147,10 @@ async def enrich_record(
         website,
         requested_positions=positions,
     )
+    if generic_email and not _generic_email_belongs_to_company(generic_email, company, website):
+        generic_email = ""
+        generic_source = ""
+        generic_note = ""
 
     chosen_email = ""
     confidence = ""

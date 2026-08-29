@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
+
 from . import verified_enricher as _base
-from .enricher import ContactCandidate, EmailCandidate, email_rank, generate_email_patterns
+from .enricher import ContactCandidate, EmailCandidate, email_rank
 from .reoon_verifier import verify_email_reoon
 
 # Preserve the existing company-email behavior. Reoon is reserved for named
@@ -23,6 +25,20 @@ async def _verify_person_email(email: str) -> dict:
     return data
 
 
+def _high_yield_patterns(name: str, domain: str) -> list[str]:
+    parts = [re.sub(r"[^a-z]", "", part.lower()) for part in (name or "").split()]
+    parts = [part for part in parts if part]
+    if len(parts) < 2 or not domain:
+        return []
+    first, last = parts[0], parts[-1]
+    # Same three candidates used in the successful Reoon benchmark.
+    return list(dict.fromkeys([
+        f"{first}@{domain}",
+        f"{first}.{last}@{domain}",
+        f"{first}{last}@{domain}",
+    ]))
+
+
 async def choose_and_verify_email(
     public_emails: list[EmailCandidate],
     contact: ContactCandidate | None,
@@ -32,8 +48,8 @@ async def choose_and_verify_email(
     """Person-first email selection for targeted searches.
 
     Named-contact mode never promotes a generic company inbox as the person's
-    email. It checks direct public emails that match the person's name, then a
-    small set of generated company-pattern candidates with Reoon Power SMTP.
+    email. It checks direct public emails that match the person's name, then the
+    same three high-yield patterns that passed the Reoon Power benchmark.
     Basic company-email mode keeps the original behavior unchanged.
     """
     named_contact = bool(contact and contact.name and len(contact.name.split()) >= 2)
@@ -47,9 +63,6 @@ async def choose_and_verify_email(
     attempts: list[str] = []
     review_candidate: tuple[str, str, str, dict] | None = None
 
-    # Only public addresses that actually resemble the selected person's name
-    # are eligible in person-search mode. Generic info@/sales@/support@ inboxes
-    # remain evidence but can no longer become the selected contact email.
     direct_public = [
         item for item in public_emails
         if _base.contact_name_match(item.email, contact)
@@ -70,10 +83,7 @@ async def choose_and_verify_email(
             review_candidate = (item.email, item.confidence or "review candidate", item.source_url, data)
 
     existing = {item.email for item in public_emails}
-    # Cap generation at three candidates per person to control free-tier usage.
-    # This still covers the high-yield first, first.last and firstlast patterns
-    # used in the successful benchmark.
-    for candidate in generate_email_patterns(contact.name, domain)[:3]:
+    for candidate in _high_yield_patterns(contact.name, domain):
         if candidate in existing and any(item.email == candidate for item in direct_public):
             continue
         data = await _verify_person_email(candidate)

@@ -31,6 +31,22 @@ def _is_official_source(url: str, website: str) -> bool:
     return bool(domain and host and (host == domain or host.endswith("." + domain)))
 
 
+def _contains_role_term(text: str, term: str) -> bool:
+    lower = (text or "").lower()
+    term = (term or "").strip().lower()
+    if not term:
+        return False
+    if len(term) <= 3:
+        return bool(re.search(rf"\b{re.escape(term)}\b", lower))
+    return term in lower
+
+
+def matches_requested_role(text: str, requested: list[str]) -> bool:
+    """Require evidence for the requested role families, not any built-in leadership title."""
+    terms = _role_terms([item.strip() for item in requested if item.strip()])
+    return any(_contains_role_term(text, term) for term in terms)
+
+
 def _freshness_adjustment(text: str) -> int:
     lower = (text or "").lower()
     score = 0
@@ -67,7 +83,7 @@ async def find_people_live(
     LinkedIn result URLs/snippets may contribute evidence but LinkedIn profile pages are never opened.
     """
     requested = [item.strip() for item in requested if item.strip()]
-    terms = _role_terms(requested)[:8]
+    terms = _role_terms(requested)[:14]
     role_query = " OR ".join(f'"{term}"' for term in terms) or '"marketing"'
     domain = domain_from_url(website)
 
@@ -83,8 +99,8 @@ async def find_people_live(
     for item in site_contacts or []:
         if not item.name or len(item.name.split()) < 2:
             continue
-        evidence = f"{item.title} {item.source_snippet}"
-        if role_score(evidence, requested) <= 0:
+        role_evidence = item.title or item.source_snippet
+        if not matches_requested_role(role_evidence, requested):
             continue
         if not _is_official_source(item.source_url, website):
             continue
@@ -103,7 +119,7 @@ async def find_people_live(
             if company_score < 40:
                 continue
             name, job = _extract_name_title(title, body, requested)
-            if not name or not job or role_score(job, requested) <= 0:
+            if not name or not job or not matches_requested_role(job, requested):
                 continue
             linkedin = href if "linkedin.com/in/" in href.lower() else ""
             candidate = ContactCandidate(

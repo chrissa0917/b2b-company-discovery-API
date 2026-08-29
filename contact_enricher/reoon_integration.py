@@ -113,16 +113,33 @@ def _source_host(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _domain_brand_tokens(domain: str) -> set[str]:
+    skip = {
+        "www", "global", "corp", "corporate", "company", "group", "mail", "email",
+        "com", "net", "org", "co", "io", "ai", "tech", "app", "cloud",
+    }
+    return {
+        token.replace("-", "")
+        for token in re.findall(r"[a-z0-9-]+", (domain or "").lower())
+        if len(token.replace("-", "")) >= 4 and token.replace("-", "") not in skip
+    }
+
+
 def candidate_mail_domains(public_emails: list[EmailCandidate], website_domain: str) -> list[str]:
-    """Rank likely corporate mail domains using emails published on the company website."""
+    """Rank likely corporate mail domains using emails published on the company website.
+
+    This fixes a major failure mode where the website host is not the email host
+    (for example a marketing site/subdomain or a newer corporate domain).
+    """
     website_domain = (website_domain or "").lower().strip(".")
     scores: Counter[str] = Counter()
     counts: Counter[str] = Counter()
-    website_label = website_domain.split(".")[0].replace("-", "") if website_domain else ""
+    website_tokens = _domain_brand_tokens(website_domain)
 
     if website_domain:
         scores[website_domain] += 3
 
+    pending: list[tuple[str, str, bool]] = []
     for item in public_emails:
         email = (getattr(item, "email", "") or "").lower().strip()
         if "@" not in email:
@@ -132,20 +149,39 @@ def candidate_mail_domains(public_emails: list[EmailCandidate], website_domain: 
             continue
         if getattr(item, "mx_valid", None) is False:
             continue
-
-        counts[host] += 1
-        scores[host] += 2
-
         source_host = _source_host(getattr(item, "source_url", "") or "")
-        if source_host == website_domain or (website_domain and source_host.endswith("." + website_domain)):
+        published_on_company_site = (
+            source_host == website_domain
+            or (website_domain and source_host.endswith("." + website_domain))
+        )
+        pending.append((host, source_host, published_on_company_site))
+        counts[host] += 1
+
+    for host, source_host, published_on_company_site in pending:
+        host_tokens = _domain_brand_tokens(host)
+        brand_related = bool(website_tokens & host_tokens)
+        same_or_subdomain = host == website_domain or (
+            website_domain and host.endswith("." + website_domain)
+        )
+
+        # Alternate mail domains need actual company evidence. This avoids
+        # promoting analytics vendors, trackers, or unrelated addresses found
+        # in page source. Brand-related domains (e.g. global.toshiba ->
+        # toshiba.com) are allowed with one company-site occurrence; unrelated
+        # domains require at least two occurrences.
+        if not same_or_subdomain and not (
+            published_on_company_site and (brand_related or counts[host] >= 2)
+        ):
+            continue
+
+        scores[host] += 2
+        if published_on_company_site:
             scores[host] += 5
-
-        host_label = host.split(".")[0].replace("-", "")
-        if website_label and (website_label in host_label or host_label in website_label):
+        if brand_related:
+            scores[host] += 4
+        if same_or_subdomain:
             scores[host] += 3
-
-        if host == website_domain or (website_domain and host.endswith("." + website_domain)):
-            scores[host] += 3
+        scores[host] += min(counts[host], 3)
 
     ranked = [
         host for host, _ in sorted(
@@ -162,7 +198,12 @@ def learn_domain_patterns(
     site_contacts: list[ContactCandidate],
     website_domain: str,
 ) -> list[tuple[str, str, int, int]]:
-    """Learn company email conventions from public person/email pairs."""
+    """Learn company email conventions from public person/email pairs.
+
+    Returns tuples of (mail_domain, pattern, score, supporting_examples).
+    Same-page person/email matches are strongest, then cross-page exact name/local
+    matches. Weak structural hints are intentionally not enough on their own.
+    """
     scores: defaultdict[tuple[str, str], int] = defaultdict(int)
     examples: Counter[tuple[str, str]] = Counter()
     mail_domains = set(candidate_mail_domains(public_emails, website_domain))
@@ -192,6 +233,8 @@ def learn_domain_patterns(
         if matched:
             continue
 
+        # Cross-page evidence is weaker but useful when the email local part
+        # clearly contains the person's name.
         for contact in site_contacts:
             if not contact.name or not _base.contact_name_match(email, contact):
                 continue
@@ -219,7 +262,11 @@ def ranked_person_candidates(
     site_contacts: list[ContactCandidate],
     max_candidates: int = 3,
 ) -> tuple[list[tuple[str, str, str]], dict]:
-    """Build evidence-ranked candidate emails instead of blindly trying permutations."""
+    """Build evidence-ranked candidate emails.
+
+    Candidate tuple: (email, reason, source). Learned company patterns are used
+    first. Generic permutations are a last resort and are capped.
+    """
     first, last = _name_parts(name)
     if not first or not last:
         return [], {"mail_domains": [], "learned_patterns": []}
@@ -242,7 +289,10 @@ def ranked_person_candidates(
         if len(candidates) >= max_candidates:
             break
 
-    fallback_patterns = ["first.last", "flast", "first", "firstlast", "f.last"]
+    # If no strong learned convention exists, use a conservative fallback order.
+    # Keep first@ first because it was the strongest successful fallback in the
+    # completed Reoon benchmark; learned company patterns always take precedence.
+    fallback_patterns = ["first", "first.last", "flast", "firstlast", "f.last"]
     for host in mail_domains[:1]:
         for pattern in fallback_patterns:
             if len(candidates) >= max_candidates:
@@ -271,7 +321,11 @@ async def choose_and_verify_person_email(
     deep_verify: bool,
     max_verifications: int = 2,
 ) -> tuple[str, str, str, dict, list[str], dict]:
-    """Hunter-style flow: public evidence -> learned domain pattern -> verification."""
+    """Hunter-style person email selection: public evidence -> learned pattern -> verify.
+
+    We do not call a guessed address "verified person" unless the verifier returns
+    a valid verdict. Catch-all/risky/unknown addresses remain review-only.
+    """
     named_contact = bool(contact and contact.name and len(contact.name.split()) >= 2)
     strategy = {"mail_domains": [], "learned_patterns": [], "verification_budget": max_verifications}
     if not named_contact or not deep_verify:
@@ -280,6 +334,7 @@ async def choose_and_verify_person_email(
     attempts: list[str] = []
     review_candidate: tuple[str, str, str, dict] | None = None
 
+    # 1. Exact public address matching the person's name. This is strongest.
     direct_public = [
         item for item in public_emails
         if _base.contact_name_match(item.email, contact) and _is_personal_company_email(item.email)
@@ -336,7 +391,12 @@ async def choose_and_verify_email(
     domain: str,
     deep_verify: bool,
 ) -> tuple[str, str, str, dict, list[str]]:
-    """Compatibility wrapper for older callers."""
+    """Compatibility wrapper used by older callers.
+
+    Without site-contact evidence this still uses the improved normalization and
+    a two-verification budget, while targeted_person_enricher calls the richer
+    function above and supplies site contacts.
+    """
     if not contact or not contact.name:
         return await _ORIGINAL_CHOOSE_AND_VERIFY(public_emails, contact, domain, deep_verify)
 

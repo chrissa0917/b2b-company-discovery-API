@@ -12,9 +12,11 @@ from .person_search import _extract_name_title, _role_terms
 
 NON_PERSON_NAME_WORDS = {
     "news", "funding", "team", "company", "official", "careers", "jobs", "press",
-    "media", "marketing", "sales", "investors", "investment", "resources", "solutions",
-    "services", "robotics", "technology", "technologies", "global", "group", "directory",
-    "profile", "department", "office", "support", "contact", "research", "report",
+    "media", "marketing", "sales", "investors", "investor", "investment", "relations",
+    "resources", "solutions", "services", "robotics", "technology", "technologies",
+    "global", "group", "directory", "profile", "department", "office", "support",
+    "contact", "research", "report", "business", "development", "growth", "strategy",
+    "brand", "partnerships", "partnership", "communications", "communication",
 }
 
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 
 from . import verified_enricher as _base
-from .enricher import crawl_company, dedupe_contacts, domain_from_url, role_score
-from .live_person_discovery import find_people_live
+from .enricher import crawl_company, dedupe_contacts, domain_from_url
+from .live_person_discovery import find_people_live, matches_requested_role
 from .live_sources import augment_email_evidence, select_generic_company_email
 from .reoon_integration import choose_and_verify_person_email
 
@@ -28,8 +28,8 @@ def _official_site_people(site_contacts, positions):
     for item in site_contacts:
         if not item.name or len(item.name.split()) < 2:
             continue
-        evidence = f"{item.title} {item.source_snippet}"
-        if role_score(evidence, positions) <= 0:
+        role_evidence = item.title or item.source_snippet
+        if not matches_requested_role(role_evidence, positions):
             continue
         item.score = max(int(item.score or 0), 205)
         out.append(item)

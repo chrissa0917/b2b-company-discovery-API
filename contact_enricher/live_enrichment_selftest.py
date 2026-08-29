@@ -5,6 +5,7 @@ from .enricher import ContactCandidate, EmailCandidate
 from .live_person_discovery import looks_human_name
 from .live_sources import select_generic_company_email
 from .reoon_integration import candidate_mail_domains, ranked_person_candidates
+from .targeted_person_enricher import _generic_email_belongs_to_company
 
 
 def run() -> None:
@@ -51,6 +52,10 @@ def run() -> None:
     assert looks_human_name("Investor Relations") is False
     assert looks_human_name("Formic's Funding") is False
     assert looks_human_name("Crunchbase News") is False
+
+    assert _generic_email_belongs_to_company("press@skyports.net", "SkyPorts Infrastructure", "https://skyports.net") is True
+    assert _generic_email_belongs_to_company("press@skyports.com", "SkyPorts Infrastructure", "https://skyports.net") is True
+    assert _generic_email_belongs_to_company("press@beta.team", "SkyPorts Infrastructure", "https://skyports.net") is False
 
     print("LIVE_ENRICHMENT_SELFTEST_OK", flush=True)
 

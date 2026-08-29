@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 
 from . import verified_enricher as _base
+from .company_identity import company_website_alignment
 from .enricher import crawl_company, dedupe_contacts, domain_from_url
-from .live_person_discovery import find_people_live, matches_requested_role
+from .live_person_discovery import find_people_live, looks_human_name, matches_requested_role
 from .live_sources import augment_email_evidence, select_generic_company_email
 from .reoon_integration import choose_and_verify_person_email
 
@@ -26,7 +27,7 @@ def contact_rating(contact) -> str:
 def _official_site_people(site_contacts, positions):
     out = []
     for item in site_contacts:
-        if not item.name or len(item.name.split()) < 2:
+        if not item.name or len(item.name.split()) < 2 or not looks_human_name(item.name):
             continue
         role_evidence = item.title or item.source_snippet
         if not matches_requested_role(role_evidence, positions):
@@ -34,6 +35,41 @@ def _official_site_people(site_contacts, positions):
         item.score = max(int(item.score or 0), 205)
         out.append(item)
     return out
+
+
+def _identity_mismatch_result(company: str, website: str, positions: list[str], score: int, note: str) -> dict:
+    return {
+        "Company": company,
+        "Website URL": website,
+        "Requested Positions": "; ".join(positions),
+        "Contact Name": "",
+        "Job Title": "",
+        "Contact Rating": "0/100",
+        "Verified Email": "",
+        "Generic Company Email": "",
+        "Usable Contact Email": "",
+        "Contact Type": "Company/website mismatch",
+        "Verification Level": "Source row needs review",
+        "Email Status": "Company/website mismatch",
+        "Ready to Email": "NO",
+        "Review Candidate Email": "",
+        "LinkedIn URL": "",
+        "Email Source": "",
+        "Generic Email Source": "",
+        "Contact Source": "",
+        "Why This Contact": "",
+        "Verification Note": "The supplied website does not appear to belong to the named company, so no outreach email was returned.",
+        "Email Confidence": "",
+        "Email Verification Score": "",
+        "Email Pattern": "",
+        "Mail Domain Used": "",
+        "Pattern Evidence": "",
+        "Other Public Emails": "",
+        "Pages Checked": 0,
+        "Addresses Checked": 0,
+        "Company Identity Score": score,
+        "Company Identity Note": note,
+    }
 
 
 async def enrich_record(
@@ -56,6 +92,10 @@ async def enrich_record(
     company = str(record.get("Company") or "").strip()
     website = str(record.get("Website URL") or "").strip()
     domain = domain_from_url(website)
+
+    identity_ok, identity_score, identity_note = company_website_alignment(company, website)
+    if not identity_ok:
+        return _identity_mismatch_result(company, website, positions, identity_score, identity_note)
 
     search_people, evidence = await asyncio.gather(
         find_people_live(company, website, positions, site_contacts=[]),
@@ -180,4 +220,6 @@ async def enrich_record(
         "Other Public Emails": other_public,
         "Pages Checked": len(visited),
         "Addresses Checked": len(attempts),
+        "Company Identity Score": identity_score,
+        "Company Identity Note": identity_note,
     }

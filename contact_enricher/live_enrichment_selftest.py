@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from .company_identity import company_website_alignment
 from .enricher import ContactCandidate, EmailCandidate
+from .live_person_discovery import looks_human_name
 from .live_sources import select_generic_company_email
 from .reoon_integration import candidate_mail_domains, ranked_person_candidates
 
@@ -37,6 +39,18 @@ def run() -> None:
 
     domains = candidate_mail_domains(public, "acme.example")
     assert domains and domains[0] == "acme.example", domains
+
+    identity_ok, _, _ = company_website_alignment("Nuro", "https://nuro.ai")
+    assert identity_ok is True
+    identity_ok, _, _ = company_website_alignment("Physical AI Startup Atoms", "https://news.crunchbase.com")
+    assert identity_ok is False
+    identity_ok, _, _ = company_website_alignment("Toyota Automated Logistics", "https://bastiansolutions.com")
+    assert identity_ok is False
+
+    assert looks_human_name("Jane Doe") is True
+    assert looks_human_name("Investor Relations") is False
+    assert looks_human_name("Formic's Funding") is False
+    assert looks_human_name("Crunchbase News") is False
 
     print("LIVE_ENRICHMENT_SELFTEST_OK", flush=True)
 

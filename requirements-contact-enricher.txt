@@ -6,3 +6,4 @@ dnspython==2.7.0
 jinja2==3.1.6
 python-multipart==0.0.20
 openpyxl==3.1.5
+https://github.com/deedy5/ddgs/archive/70a5635510fb8d5b15d5ba6ceced6a67e212149b.zip

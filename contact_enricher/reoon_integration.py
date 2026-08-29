@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections import Counter, defaultdict
+from urllib.parse import urlparse
 
 from . import verified_enricher as _base
 from .enricher import ContactCandidate, EmailCandidate, email_rank
@@ -9,6 +12,22 @@ from .reoon_verifier import verify_email_reoon
 # Preserve the existing company-email behavior. Reoon is reserved for named
 # person searches so the free company-email flow does not consume Reoon credits.
 _ORIGINAL_CHOOSE_AND_VERIFY = _base.choose_and_verify_email
+
+FREE_MAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com",
+    "live.com", "icloud.com", "me.com", "aol.com", "proton.me", "protonmail.com",
+}
+GENERIC_LOCALPARTS = {
+    "info", "contact", "hello", "sales", "support", "marketing", "press", "media",
+    "pr", "communications", "partnerships", "team", "careers", "jobs", "privacy",
+    "abuse", "admin", "office", "enquiries", "inquiries", "service", "customerservice",
+}
+
+PATTERN_ORDER = [
+    "first.last", "flast", "first", "firstlast", "f.last", "firstl",
+    "last.first", "lastf", "last", "lastfirst", "last.f",
+    "first_last", "first-last", "f_last",
+]
 
 
 async def _verify_person_email(email: str) -> dict:
@@ -25,18 +44,290 @@ async def _verify_person_email(email: str) -> dict:
     return data
 
 
-def _high_yield_patterns(name: str, domain: str) -> list[str]:
-    parts = [re.sub(r"[^a-z]", "", part.lower()) for part in (name or "").split()]
-    parts = [part for part in parts if part]
-    if len(parts) < 2 or not domain:
-        return []
-    first, last = parts[0], parts[-1]
-    # Same three candidates used in the successful Reoon benchmark.
-    return list(dict.fromkeys([
-        f"{first}@{domain}",
-        f"{first}.{last}@{domain}",
-        f"{first}{last}@{domain}",
-    ]))
+def _ascii_token(value: str) -> str:
+    value = unicodedata.normalize("NFKD", value or "")
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z]", "", value.lower())
+
+
+def _name_parts(name: str) -> tuple[str, str]:
+    raw = [part for part in re.split(r"\s+", (name or "").strip()) if part]
+    cleaned = [_ascii_token(part) for part in raw]
+    cleaned = [part for part in cleaned if part and part not in {"dr", "mr", "mrs", "ms", "prof"}]
+    while cleaned and cleaned[-1] in {"jr", "sr", "ii", "iii", "iv"}:
+        cleaned.pop()
+    if len(cleaned) < 2:
+        return "", ""
+    return cleaned[0], cleaned[-1]
+
+
+def _format_local(pattern: str, first: str, last: str) -> str:
+    mapping = {
+        "first.last": f"{first}.{last}",
+        "flast": f"{first[:1]}{last}",
+        "first": first,
+        "firstlast": f"{first}{last}",
+        "f.last": f"{first[:1]}.{last}",
+        "firstl": f"{first}{last[:1]}",
+        "last.first": f"{last}.{first}",
+        "lastf": f"{last}{first[:1]}",
+        "last": last,
+        "lastfirst": f"{last}{first}",
+        "last.f": f"{last}.{first[:1]}",
+        "first_last": f"{first}_{last}",
+        "first-last": f"{first}-{last}",
+        "f_last": f"{first[:1]}_{last}",
+    }
+    return mapping.get(pattern, "")
+
+
+def _pattern_for_email(name: str, email: str, domain: str) -> str:
+    first, last = _name_parts(name)
+    if not first or not last or not email or "@" not in email:
+        return ""
+    local, host = email.lower().split("@", 1)
+    if domain and host != domain and not host.endswith("." + domain):
+        pass
+    for pattern in PATTERN_ORDER:
+        if local == _format_local(pattern, first, last):
+            return pattern
+    return ""
+
+
+def _is_personal_company_email(email: str) -> bool:
+    if not email or "@" not in email:
+        return False
+    local, host = email.lower().split("@", 1)
+    if host in FREE_MAIL_DOMAINS or local in GENERIC_LOCALPARTS:
+        return False
+    if any(local.startswith(prefix) for prefix in ("noreply", "no-reply", "newsletter", "updates")):
+        return False
+    return bool(re.fullmatch(r"[a-z0-9._+-]+", local))
+
+
+def _source_host(url: str) -> str:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def candidate_mail_domains(public_emails: list[EmailCandidate], website_domain: str) -> list[str]:
+    """Rank likely corporate mail domains using emails published on the company website."""
+    website_domain = (website_domain or "").lower().strip(".")
+    scores: Counter[str] = Counter()
+    counts: Counter[str] = Counter()
+    website_label = website_domain.split(".")[0].replace("-", "") if website_domain else ""
+
+    if website_domain:
+        scores[website_domain] += 3
+
+    for item in public_emails:
+        email = (getattr(item, "email", "") or "").lower().strip()
+        if "@" not in email:
+            continue
+        host = email.split("@", 1)[1].strip(".")
+        if not host or host in FREE_MAIL_DOMAINS:
+            continue
+        if getattr(item, "mx_valid", None) is False:
+            continue
+
+        counts[host] += 1
+        scores[host] += 2
+
+        source_host = _source_host(getattr(item, "source_url", "") or "")
+        if source_host == website_domain or (website_domain and source_host.endswith("." + website_domain)):
+            scores[host] += 5
+
+        host_label = host.split(".")[0].replace("-", "")
+        if website_label and (website_label in host_label or host_label in website_label):
+            scores[host] += 3
+
+        if host == website_domain or (website_domain and host.endswith("." + website_domain)):
+            scores[host] += 3
+
+    ranked = [
+        host for host, _ in sorted(
+            scores.items(),
+            key=lambda kv: (kv[1], counts[kv[0]], kv[0] == website_domain),
+            reverse=True,
+        )
+    ]
+    return ranked[:2] or ([website_domain] if website_domain else [])
+
+
+def learn_domain_patterns(
+    public_emails: list[EmailCandidate],
+    site_contacts: list[ContactCandidate],
+    website_domain: str,
+) -> list[tuple[str, str, int, int]]:
+    """Learn company email conventions from public person/email pairs."""
+    scores: defaultdict[tuple[str, str], int] = defaultdict(int)
+    examples: Counter[tuple[str, str]] = Counter()
+    mail_domains = set(candidate_mail_domains(public_emails, website_domain))
+
+    for item in public_emails:
+        email = (getattr(item, "email", "") or "").lower().strip()
+        if not _is_personal_company_email(email) or "@" not in email:
+            continue
+        host = email.split("@", 1)[1]
+        if mail_domains and host not in mail_domains:
+            continue
+
+        same_page = [
+            contact for contact in site_contacts
+            if contact.name and getattr(contact, "source_url", "") == getattr(item, "source_url", "")
+        ]
+        matched = False
+
+        for contact in same_page:
+            pattern = _pattern_for_email(contact.name, email, host)
+            if pattern:
+                scores[(host, pattern)] += 10
+                examples[(host, pattern)] += 1
+                matched = True
+                break
+
+        if matched:
+            continue
+
+        for contact in site_contacts:
+            if not contact.name or not _base.contact_name_match(email, contact):
+                continue
+            pattern = _pattern_for_email(contact.name, email, host)
+            if pattern:
+                scores[(host, pattern)] += 4
+                examples[(host, pattern)] += 1
+                break
+
+    ranked = sorted(
+        [
+            (host, pattern, score, examples[(host, pattern)])
+            for (host, pattern), score in scores.items()
+        ],
+        key=lambda row: (row[2], row[3], -PATTERN_ORDER.index(row[1])),
+        reverse=True,
+    )
+    return ranked
+
+
+def ranked_person_candidates(
+    name: str,
+    website_domain: str,
+    public_emails: list[EmailCandidate],
+    site_contacts: list[ContactCandidate],
+    max_candidates: int = 3,
+) -> tuple[list[tuple[str, str, str]], dict]:
+    """Build evidence-ranked candidate emails instead of blindly trying permutations."""
+    first, last = _name_parts(name)
+    if not first or not last:
+        return [], {"mail_domains": [], "learned_patterns": []}
+
+    mail_domains = candidate_mail_domains(public_emails, website_domain)
+    learned = learn_domain_patterns(public_emails, site_contacts, website_domain)
+    candidates: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+
+    for host, pattern, score, support in learned:
+        local = _format_local(pattern, first, last)
+        email = f"{local}@{host}" if local and host else ""
+        if email and email not in seen:
+            seen.add(email)
+            candidates.append((
+                email,
+                f"learned-pattern:{pattern};score={score};examples={support}",
+                "domain-pattern",
+            ))
+        if len(candidates) >= max_candidates:
+            break
+
+    fallback_patterns = ["first.last", "flast", "first", "firstlast", "f.last"]
+    for host in mail_domains[:1]:
+        for pattern in fallback_patterns:
+            if len(candidates) >= max_candidates:
+                break
+            local = _format_local(pattern, first, last)
+            email = f"{local}@{host}"
+            if email in seen:
+                continue
+            seen.add(email)
+            candidates.append((email, f"fallback-pattern:{pattern}", "pattern-fallback"))
+
+    return candidates[:max_candidates], {
+        "mail_domains": mail_domains,
+        "learned_patterns": [
+            {"domain": host, "pattern": pattern, "score": score, "examples": support}
+            for host, pattern, score, support in learned[:5]
+        ],
+    }
+
+
+async def choose_and_verify_person_email(
+    public_emails: list[EmailCandidate],
+    site_contacts: list[ContactCandidate],
+    contact: ContactCandidate | None,
+    website_domain: str,
+    deep_verify: bool,
+    max_verifications: int = 2,
+) -> tuple[str, str, str, dict, list[str], dict]:
+    """Hunter-style flow: public evidence -> learned domain pattern -> verification."""
+    named_contact = bool(contact and contact.name and len(contact.name.split()) >= 2)
+    strategy = {"mail_domains": [], "learned_patterns": [], "verification_budget": max_verifications}
+    if not named_contact or not deep_verify:
+        return "", "", "", {"verdict": "not_run"}, [], strategy
+
+    attempts: list[str] = []
+    review_candidate: tuple[str, str, str, dict] | None = None
+
+    direct_public = [
+        item for item in public_emails
+        if _base.contact_name_match(item.email, contact) and _is_personal_company_email(item.email)
+    ]
+    direct_public = sorted(
+        direct_public,
+        key=lambda item: email_rank(item.email, website_domain),
+        reverse=True,
+    )
+    for item in direct_public[:1]:
+        data = await _verify_person_email(item.email)
+        verdict = str(data.get("verdict") or "unknown").lower()
+        attempts.append(f"{item.email}={verdict}")
+        if verdict == "valid":
+            strategy["selected_reason"] = "public-exact-name-match"
+            return item.email, "verified public named contact", item.source_url, data, attempts, strategy
+        if verdict in {"catch_all", "risky", "unknown"}:
+            review_candidate = (item.email, item.confidence or "review candidate", item.source_url, data)
+
+    remaining_budget = max(0, max_verifications - len(attempts))
+    ranked, learned_strategy = ranked_person_candidates(
+        contact.name,
+        website_domain,
+        public_emails,
+        site_contacts,
+        max_candidates=max(remaining_budget, 0),
+    )
+    strategy.update(learned_strategy)
+
+    existing_direct = {item.email.lower() for item in direct_public}
+    for candidate, reason, source_type in ranked[:remaining_budget]:
+        if candidate.lower() in existing_direct:
+            continue
+        data = await _verify_person_email(candidate)
+        verdict = str(data.get("verdict") or "unknown").lower()
+        attempts.append(f"{candidate}={verdict}")
+        if verdict == "valid":
+            strategy["selected_reason"] = reason
+            return candidate, f"verified contact email · {reason}", contact.source_url, data, attempts, strategy
+        if verdict in {"catch_all", "risky", "unknown"} and review_candidate is None:
+            review_candidate = (candidate, f"review candidate · {reason}", contact.source_url, data)
+
+    if review_candidate:
+        strategy["selected_reason"] = "review-only"
+        return review_candidate[0], review_candidate[1], review_candidate[2], review_candidate[3], attempts, strategy
+
+    strategy["selected_reason"] = "no-valid-candidate"
+    return "", "", "", {"verdict": "invalid" if attempts else "not_run"}, attempts, strategy
 
 
 async def choose_and_verify_email(
@@ -45,55 +336,16 @@ async def choose_and_verify_email(
     domain: str,
     deep_verify: bool,
 ) -> tuple[str, str, str, dict, list[str]]:
-    """Person-first email selection for targeted searches.
+    """Compatibility wrapper for older callers."""
+    if not contact or not contact.name:
+        return await _ORIGINAL_CHOOSE_AND_VERIFY(public_emails, contact, domain, deep_verify)
 
-    Named-contact mode never promotes a generic company inbox as the person's
-    email. It checks direct public emails that match the person's name, then the
-    same three high-yield patterns that passed the Reoon Power benchmark.
-    Basic company-email mode keeps the original behavior unchanged.
-    """
-    named_contact = bool(contact and contact.name and len(contact.name.split()) >= 2)
-    if not named_contact:
-        return await _ORIGINAL_CHOOSE_AND_VERIFY(
-            public_emails, contact, domain, deep_verify
-        )
-    if not deep_verify:
-        return "", "", "", {"verdict": "not_run"}, []
-
-    attempts: list[str] = []
-    review_candidate: tuple[str, str, str, dict] | None = None
-
-    direct_public = [
-        item for item in public_emails
-        if _base.contact_name_match(item.email, contact)
-    ]
-    direct_public = sorted(
-        direct_public,
-        key=lambda item: email_rank(item.email, domain),
-        reverse=True,
+    email, confidence, source, verification, attempts, _ = await choose_and_verify_person_email(
+        public_emails,
+        [],
+        contact,
+        domain,
+        deep_verify,
+        max_verifications=2,
     )
-
-    for item in direct_public[:2]:
-        data = await _verify_person_email(item.email)
-        verdict = str(data.get("verdict") or "unknown").lower()
-        attempts.append(f"{item.email}={verdict}")
-        if verdict == "valid":
-            return item.email, "verified named contact", item.source_url, data, attempts
-        if verdict in {"catch_all", "risky", "unknown"} and review_candidate is None:
-            review_candidate = (item.email, item.confidence or "review candidate", item.source_url, data)
-
-    existing = {item.email for item in public_emails}
-    for candidate in _high_yield_patterns(contact.name, domain):
-        if candidate in existing and any(item.email == candidate for item in direct_public):
-            continue
-        data = await _verify_person_email(candidate)
-        verdict = str(data.get("verdict") or "unknown").lower()
-        attempts.append(f"{candidate}={verdict}")
-        if verdict == "valid":
-            return candidate, "verified contact email", contact.source_url, data, attempts
-        if verdict in {"catch_all", "risky", "unknown"} and review_candidate is None:
-            review_candidate = (candidate, "review candidate", contact.source_url, data)
-
-    if review_candidate:
-        return review_candidate[0], review_candidate[1], review_candidate[2], review_candidate[3], attempts
-    return "", "", "", {"verdict": "invalid" if attempts else "not_run"}, attempts
+    return email, confidence, source, verification, attempts
